@@ -1,0 +1,34 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Secrets & local runtime config (created by saveToken())
+.proofcast-config.json
+.env
+.env.*
+!.env.example
+
+# ProofCast live session context (debug log, per-session)
+proofcast-live.md
+
+# ProofCast video demo artifacts
+*.webm
+*.mp4
+demos/
+playwright-report/
+test-results/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Local agent / editor settings (machine-specific)
+.claude/settings.local.json
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
