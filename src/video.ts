@@ -240,11 +240,11 @@ async function scrollThrough(
     await page.mouse.wheel(0, opts.by);
     return;
   }
-  const steps = opts.steps ?? 8;
+  const steps = opts.steps ?? 4;
   const delta = opts.to === "top" ? -600 : 600;
   for (let i = 0; i < steps; i++) {
     await page.mouse.wheel(0, delta);
-    await page.waitForTimeout(200);
+    await page.waitForTimeout(120);
   }
 }
 
@@ -274,6 +274,12 @@ export interface DemoResult {
   webmPath: string;
   /** Size of the MP4 in bytes. */
   sizeBytes: number;
+  /** Video width in pixels (Telegram `width` hint → no server-side probing). */
+  width: number;
+  /** Video height in pixels (Telegram `height` hint). */
+  height: number;
+  /** Clip duration in whole seconds (Telegram `duration` hint). */
+  durationSec: number;
 }
 
 /**
@@ -284,7 +290,7 @@ export interface DemoResult {
  */
 export async function recordDemo(options: RecordDemoOptions = {}): Promise<DemoResult> {
   const html = options.html ?? DEFAULT_DEMO_HTML;
-  const durationMs = options.durationMs ?? 1200;
+  const durationMs = options.durationMs ?? 800;
   const viewport = options.viewport ?? { ...DEFAULT_VIEWPORT };
 
   const sockets = new Set<Socket>();
@@ -339,14 +345,22 @@ export async function recordDemo(options: RecordDemoOptions = {}): Promise<DemoR
     browser = undefined;
 
     const webmPath = await video.path();
-    const videoPath = await transcodeToMp4(webmPath);
+    const { mp4Path: videoPath, durationSec } = await transcodeToMp4(webmPath);
     const buffer = await readFile(videoPath);
     if (buffer.length === 0) {
       throw new Error(`Recorded video is empty: ${videoPath}`);
     }
 
     demoGeneratedThisSession = true;
-    return { video: buffer, videoPath, webmPath, sizeBytes: buffer.length };
+    return {
+      video: buffer,
+      videoPath,
+      webmPath,
+      sizeBytes: buffer.length,
+      width: viewport.width,
+      height: viewport.height,
+      durationSec,
+    };
   } finally {
     // Best-effort teardown — runs on success (no-ops) and on failure.
     if (context) {
@@ -370,31 +384,56 @@ export async function recordDemo(options: RecordDemoOptions = {}): Promise<DemoR
   }
 }
 
+/** Result of transcoding: the MP4 path and its duration in whole seconds. */
+interface TranscodeResult {
+  mp4Path: string;
+  /** Clip duration in seconds (>=1), for the Telegram `duration` hint. */
+  durationSec: number;
+}
+
 /**
  * Transcode a Playwright `.webm` capture into a broadly-compatible MP4
  * (H.264 / yuv420p, faststart). Uses `execFile` with an argument array — no
  * shell is invoked, so there is no command-injection surface.
+ *
+ * `-crf 28` keeps a short screen recording small (fast to upload and for
+ * Telegram to process), and the clip duration is read straight from ffmpeg's
+ * stderr so callers can pass it to Telegram (no separate `ffprobe` needed).
  */
-async function transcodeToMp4(webmPath: string): Promise<string> {
+async function transcodeToMp4(webmPath: string): Promise<TranscodeResult> {
   if (!ffmpegPath) {
     throw new Error(
       "ffmpeg binary not found (ffmpeg-static). Cannot produce the MP4 demo.",
     );
   }
   const mp4Path = webmPath.replace(/\.webm$/i, ".mp4");
-  await execFileAsync(
+  const { stderr } = await execFileAsync(
     ffmpegPath,
     [
       "-y",
       "-i", webmPath,
+      "-an", // the capture has no audio track; skip audio handling entirely
       "-c:v", "libx264",
+      "-preset", "veryfast", // encode faster; the short clip stays small
+      "-crf", "28", // smaller file → quicker upload + Telegram processing
       "-pix_fmt", "yuv420p",
-      "-movflags", "+faststart",
+      "-movflags", "+faststart", // moov atom up front so Telegram can stream it
       mp4Path,
     ],
     { maxBuffer: 16 * 1024 * 1024 },
   );
-  return mp4Path;
+  return { mp4Path, durationSec: parseDurationSec(stderr) };
+}
+
+/** Parse `Duration: HH:MM:SS.xx` from ffmpeg's stderr into whole seconds (>=1). */
+function parseDurationSec(ffmpegStderr: string): number {
+  const match = /Duration:\s*(\d+):(\d{2}):(\d{2}(?:\.\d+)?)/.exec(ffmpegStderr);
+  if (!match) {
+    return 1;
+  }
+  const [, h, m, s] = match;
+  const seconds = Number(h) * 3600 + Number(m) * 60 + Number(s);
+  return Math.max(1, Math.round(seconds));
 }
 
 /** Start listening on an ephemeral loopback port; resolve with the port number. */

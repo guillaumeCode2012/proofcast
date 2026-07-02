@@ -54,8 +54,22 @@ export interface DemoContext {
   reply(text: string): Promise<unknown>;
   replyWithVideo(
     video: { source: Buffer; filename?: string },
-    extra?: { caption?: string },
+    extra?: VideoExtra,
   ): Promise<unknown>;
+}
+
+/**
+ * Metadata sent alongside the video. Passing width/height/duration and
+ * `supports_streaming` lets Telegram deliver the clip immediately instead of
+ * probing and re-processing the file — that's what keeps the gap between "demo
+ * recorded" and "user has it" down to a few seconds.
+ */
+export interface VideoExtra {
+  caption?: string;
+  width?: number;
+  height?: number;
+  duration?: number;
+  supports_streaming?: boolean;
 }
 
 /** Per-chat state: whether a video proof has been produced this session. */
@@ -101,7 +115,14 @@ export async function runDemoCommand(
     state.demoReady = true;
     await ctx.replyWithVideo(
       { source: demo.video, filename: "proofcast-demo.mp4" },
-      { caption: "✅ Preuve vidéo prête. Vérifie-la, puis envoie « Déploie »." },
+      {
+        caption: "✅ Preuve vidéo prête. Vérifie-la, puis envoie « Déploie ».",
+        // Metadata so Telegram delivers immediately (no probing / re-encoding).
+        width: demo.width,
+        height: demo.height,
+        duration: demo.durationSec,
+        supports_streaming: true,
+      },
     );
   } catch (err) {
     state.demoReady = false;

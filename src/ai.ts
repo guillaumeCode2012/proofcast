@@ -19,16 +19,41 @@ import OpenAI from "openai";
 
 import { readRecentMemory } from "./memory.js";
 
-/** Non-streaming max output tokens (kept under HTTP timeouts). */
-export const DEFAULT_MAX_TOKENS = 16000;
+/**
+ * Non-streaming max output tokens. This is a cap, not a target: the model stops
+ * when the document is done. It is kept deliberately low because a ProofCast demo
+ * is a single-screen page (a few KB of HTML) — a smaller cap bounds the worst-case
+ * generation time so the whole demo pipeline stays within its ~1 min budget.
+ * Override per call with `options.maxTokens`.
+ */
+export const DEFAULT_MAX_TOKENS = 4096;
 
-/** Default system prompt: emit a demo-able, self-contained HTML feature. */
+/**
+ * Wall-clock backstop for a single AI generation (ms). The Anthropic/OpenAI SDKs
+ * default to a 10-minute timeout, so a slow or stalled model would hang the demo
+ * far past its budget. This caps that. Override with `PROOFCAST_AI_TIMEOUT_MS`.
+ */
+export const DEFAULT_AI_TIMEOUT_MS = 60_000;
+
+/**
+ * Default system prompt: emit a demo-able, self-contained HTML feature. It asks
+ * for a COMPACT single-screen page on purpose — fewer output tokens means the
+ * model responds faster, which is what keeps a "Démo" under a minute.
+ */
 export const DEFAULT_SYSTEM_PROMPT =
   "You are a senior engineer inside ProofCast. Given a short feature request, " +
   "produce a SINGLE self-contained HTML document (inline CSS and JS, no external " +
   "dependencies or build step) that implements the feature so it can be served " +
-  "and demonstrated directly in a browser. Output only the HTML document — no " +
-  "markdown fences, no explanation.";
+  "and demonstrated directly in a browser. Keep it COMPACT and focused: one screen " +
+  "that clearly shows the feature working, concise inline CSS, and only the JS the " +
+  "demo needs — no placeholder filler, no long copy, no unrelated sections. Output " +
+  "only the HTML document — no markdown fences, no explanation.";
+
+/** Resolve the per-call AI timeout from the environment, falling back to the default. */
+function aiTimeoutMs(): number {
+  const raw = Number(process.env.PROOFCAST_AI_TIMEOUT_MS);
+  return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_AI_TIMEOUT_MS;
+}
 
 /** Thrown when the required API key is not set in the environment. */
 export class MissingApiKeyError extends Error {
@@ -114,7 +139,12 @@ export function createAnthropicProvider(config: AnthropicProviderConfig = {}): A
     async generateFeature(description, options = {}) {
       const model = requireModel(config.model ?? options.model, "ANTHROPIC_MODEL");
       const client =
-        config.client ?? new Anthropic({ apiKey: requireApiKey(config.apiKey, "ANTHROPIC_API_KEY") });
+        config.client ??
+        new Anthropic({
+          apiKey: requireApiKey(config.apiKey, "ANTHROPIC_API_KEY"),
+          timeout: aiTimeoutMs(),
+          maxRetries: 1,
+        });
 
       const response = await client.messages.create({
         model,
@@ -150,6 +180,8 @@ export function createOpenAiProvider(config: OpenAiProviderConfig = {}): AiProvi
         new OpenAI({
           apiKey: requireApiKey(config.apiKey, "OPENAI_API_KEY"),
           baseURL: config.baseURL ?? process.env.OPENAI_BASE_URL,
+          timeout: aiTimeoutMs(),
+          maxRetries: 1,
         });
 
       const completion = await client.chat.completions.create({
