@@ -18,8 +18,10 @@ Evidence over assertion. **Proof before deploy.**
 
 <br/>
 
-<!-- ▶ Replace this with a 20–30s screen capture: `Démo` → feature is built → proof.mp4 lands in Telegram → `Déploie`. -->
-<img src="docs/proofcast-demo.gif" alt="ProofCast: a Démo command builds a feature, records a video proof, and the MP4 lands in Telegram — then Déploie ships it." width="820" />
+<!-- Real run: `Démo` builds the feature, the recorded proof (real Chromium) lands in Telegram, then `Déploie`. -->
+<img src="docs/proofcast-demo.gif" alt="ProofCast: a Démo command builds a payment page, records a real video proof of it working, and the MP4 lands in Telegram — then Déploie ships it." width="320" />
+
+<sub>The clip inside the chat is a <b>real browser recording</b>, produced by ProofCast's own pipeline — not a mockup.</sub>
 
 </div>
 
