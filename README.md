@@ -16,6 +16,8 @@ Evidence over assertion. **Proof before deploy.**
 
 [Quickstart](#quickstart) · [How it works](#how-it-works) · [Principles](#principles) · [Vision](#vision)
 
+[![Contribuer au projet](https://img.shields.io/badge/Contribuer_au_projet-FFDD00?style=for-the-badge&logo=buymeacoffee&logoColor=black)](https://www.buymeacoffee.com/guillaume_code) &nbsp; [![Suivre sur X](https://img.shields.io/badge/Suivre_@GuillaumeP86859-black?style=for-the-badge&logo=x&logoColor=white)](https://x.com/GuillaumeP86859)
+
 <br/>
 
 <!-- Real run: `Démo` builds the feature, the recorded proof (real Chromium) lands in Telegram, then `Déploie`. -->
@@ -316,6 +318,8 @@ External services are mocked and injected; Chromium and ffmpeg run for real. Con
 **If an AI is going to ship your code, make it prove the code works first.**
 
 Star the repo if you believe verification is the next layer of the AI stack.
+
+[![Contribuer au projet](https://img.shields.io/badge/Contribuer_au_projet-FFDD00?style=for-the-badge&logo=buymeacoffee&logoColor=black)](https://www.buymeacoffee.com/guillaume_code) &nbsp; [![Suivre sur X](https://img.shields.io/badge/Suivre_@GuillaumeP86859-black?style=for-the-badge&logo=x&logoColor=white)](https://x.com/GuillaumeP86859)
 
 [MIT](LICENSE) © 2026 Guillaume Prévot
 
