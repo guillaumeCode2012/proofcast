@@ -2,11 +2,11 @@
 
 # ProofCast
 
-### No proof, no prod.
+### The autonomous AI agent that proves its work before it ships.
 
-**Your AI agent writes the code. ProofCast makes it prove the feature runs — on video, in a real browser — before a single line reaches production.**
+**Give it a feature in one sentence. ProofCast orchestrates a model to build it, drives it in a real browser, records the proof, and refuses to deploy until you've watched it work.**
 
-Evidence over assertion. **Proof before deploy.**
+Autonomous — never reckless. **Proof before deploy. No proof, no prod.**
 
 ![Tests](https://img.shields.io/badge/tests-75%20passing-2ea44f)
 ![Node](https://img.shields.io/badge/node-%E2%89%A518.17-3c873a)
@@ -14,9 +14,9 @@ Evidence over assertion. **Proof before deploy.**
 ![License](https://img.shields.io/badge/license-MIT-blue)
 ![Driven by](https://img.shields.io/badge/driven%20by-Claude%20Code%20·%20Codex%20·%20Cursor-000)
 
-[Quickstart](#quickstart) · [How it works](#how-it-works) · [Principles](#principles) · [Vision](#vision)
-
 [![Contribuer au projet](https://img.shields.io/badge/Contribuer_au_projet-FFDD00?style=for-the-badge&logo=buymeacoffee&logoColor=black)](https://www.buymeacoffee.com/guillaume_code) &nbsp; [![Suivre sur X](https://img.shields.io/badge/Suivre_@GuillaumeP86859-black?style=for-the-badge&logo=x&logoColor=white)](https://x.com/GuillaumeP86859)
+
+[What it is](#what-proofcast-is) · [The loop](#the-loop) · [Everything inside](#everything-inside) · [Quickstart](#quickstart) · [Vision](#vision)
 
 <br/>
 
@@ -29,48 +29,62 @@ Evidence over assertion. **Proof before deploy.**
 
 <br/>
 
-> **An AI agent will happily ship code it never ran once.**
-> ProofCast makes running it — and showing you the video — the price of reaching production.
+> **An autonomous agent will happily ship code it never ran once.**
+> ProofCast is the one built the other way around: it proves the work — on video, in a real browser — before anything reaches production.
 
 ---
 
-## We automated writing code. We never automated trusting it.
+## The world runs on agents now. Almost none of them verify.
 
-In two years, generating software went from a novelty to a default. Agents scaffold, refactor, and ship while you watch a spinner. The one thing that didn't get automated is the part that actually protects you: **knowing it works.**
+Give an agent a goal and it acts: it writes, runs commands, deploys — on its own. The speed is the point. The danger is that it acts **on faith**. It reports a success it never checked, greenlights a build that never ran, and you discover the truth in production.
 
-So we ship on vibes. A confident summary. A green check. A *"Done ✅."* The feature that was never opened in a browser goes to production because the model sounded sure.
+We automated *writing* software long before we automated *trusting* it. None of the usual signals close that gap:
 
-None of the usual signals are evidence:
-
-- **Passing tests** prove the code the model chose to test behaves the way the model expected. Green tests, broken feature — you've seen it.
+- **Passing tests** prove the code the model chose to test behaves the way the model expected.
 - **A green CI badge** proves it *built*, not that it *works*.
-- **"I ran it, looks good"** is gone the instant your terminal scrolls. Unrecorded, unshareable, unverifiable.
-- **A screenshot** is a frozen frame. The bug lives in the interaction.
-- **Reviewing the diff** means reading intent — not observing behavior.
+- **"I ran it, looks good"** vanishes the instant the terminal scrolls.
+- **A screenshot** is a frozen frame; the bug lives in the interaction.
 
-The missing layer was never *more generation*. It's **proof**: durable, watchable evidence that the actual feature does the actual thing — enforced *before* the deploy, not apologized for after.
+The missing layer was never *more autonomy*. It's **proof** — durable, watchable evidence that the actual feature does the actual thing, produced before the irreversible step, not apologized for after.
 
 ---
 
-## How it works
+## What ProofCast is
 
-ProofCast sits between your agent and production and enforces a single contract.
+ProofCast is **not** a plugin you bolt onto your IDE, and it's **not** a linter for AI output. It's a fully autonomous agent with its own memory, its own tools, and its own judgment — in the lineage of today's agentic systems, but defined by one discipline the others lack: **it stops to prove its work before it ships.**
 
-When a feature is ready, ProofCast:
+You talk to it in plain language from Telegram. It configures itself, orchestrates the model *you* chose, builds the feature, runs it in a real browser, records the proof, and — only once you've seen that proof — deploys. Autonomy with a receipt.
 
-1. **Generates** it with *your* model — a self-contained, runnable feature.
-2. **Runs** it in a real Chromium browser via Playwright.
-3. **Records** the feature actually being used, as an **MP4**.
-4. **Delivers** that proof to your Telegram.
+---
 
-Then it waits. You watch a ten-second clip on your phone. If it's right, you reply **`Déploie`**. If no clip exists, **there is nothing to deploy** — `Déploie` is **blocked until a `Démo`** proof has been produced this session. No override. That gate *is* the product.
+## The loop
 
-> `Démo` and `Déploie` are the two commands you send the bot — French for *Demo* and *Deploy*. They're the whole interface.
+One command in. A proven, deployable feature out.
+
+```
+you → "Démo a signup page"
+        │
+        ▼
+   ┌─────────────────────── ProofCast (autonomous) ───────────────────────┐
+   │  orchestrate   your model builds the feature (memory-informed)        │
+   │  run           serve it, drive it in real Chromium (Playwright)       │
+   │  record        capture the real interaction → MP4                     │
+   │  reason        narrate every step to proofcast-live.md                │
+   └───────────────────────────────┬──────────────────────────────────────┘
+                                    ▼
+        ▶ proof.mp4 lands in your Telegram  ·  session marked demo-ready
+                                    │
+you → "Déploie"                     ▼
+        └──────────►  proof exists?  ──►  vercel --prod  ──►  ✅ production URL
+                          └─ no ─────►  ✋ blocked until a `Démo` exists
+```
+
+`Démo` and `Déploie` — French for *demo* and *deploy* — are the whole interface. **`Déploie` is blocked until a `Démo`** proof has been produced this session. No override. That gate is the agent's conscience.
 
 <table>
 <tr>
-<th align="left">Without ProofCast</th>
-<th align="left">With ProofCast</th>
+<th align="left">A typical autonomous agent</th>
+<th align="left">ProofCast</th>
 </tr>
 <tr>
 <td valign="top">
@@ -101,85 +115,69 @@ agent:  ✅ https://acme.vercel.app
 
 ---
 
-## Principles
+## Everything inside
 
-- **Evidence over assertion.** A recording of it working beats a paragraph claiming it does.
-- **Deploy is earned, not assumed.** Production is gated on proof — the gate has no bypass.
-- **The human stays in the loop, for the ten seconds that matter.** Watch, approve. Nothing else.
-- **Your model, never ours.** ProofCast never pre-selects a provider or a model. You bring it; your environment decides.
-- **Secrets never travel.** Keys stay in your environment; tokens are git-ignored on write; anything hitting disk is redacted first.
+ProofCast isn't a demo recorder with extra steps. Recording is one organ; here's the whole body.
+
+- **Autonomous onboarding.** It sets its own bot up end to end — hands you a BotFather link, validates and persists the token, wires the provider — asking you for exactly one thing.
+- **Auto setup.** `npm run setup` installs dependencies, builds, installs Chromium, and prints a readiness report telling the driving agent precisely what's left.
+- **AI orchestration.** It resolves your provider, folds memory into the prompt, generates the feature, and keeps the call bounded with a timeout and a retry — a slow or flaky model can't hang the loop.
+- **Multi-provider, never pre-chosen.** Anthropic, OpenAI, Codex, or any compatible endpoint. Your environment picks the model; ProofCast never does, so you're never locked in.
+- **Persistent memory.** Project-scoped, cross-session, redacted — and injected back into every prompt, so the agent learns from its own failures instead of repeating them.
+- **Smart path resolution.** Say *"work in the example folder"* in plain language; it finds the right directory, case-insensitively, and refuses to escape the project.
+- **Transparent reasoning.** It narrates every step to `proofcast-live.md` in real time. When something breaks, you read exactly where it stood — no black box.
+- **Real-browser proof (Playwright).** It drives your feature in genuine Chromium and records the interaction as an MP4 — evidence you can watch, not a checkmark you have to trust.
+- **Proof Before Deploy.** The one rule the engine will not let itself, or you, break: no deploy without a real proof this session.
+- **Security by construction.** The token is git-ignored the instant it's written; secrets are redacted before they touch disk; deploy arguments are validated against injection; API keys are read from your environment and never requested.
+- **Runs from your coding agent.** Claude Code, Codex, and Cursor drive it through a machine-readable runbook. You bootstrap once, then command it from your phone.
 
 ---
 
-## Features
+## Principles
 
-Not a checklist — the reasons ProofCast exists.
-
-- **Proof that matches the feature.** A signup page gets an email typed in and submitted; a landing page gets scrolled; you can script any sequence. A login-form demo of a checkout flow proves nothing, so ProofCast doesn't do that.
-- **A deploy gate with no escape hatch.** You cannot ship what you haven't watched work. `Déploie` stays blocked until a real `Démo` exists — the one rule the engine will not let you or the agent break.
-- **Bring your own model.** Anthropic, OpenAI, Codex, or any OpenAI-compatible endpoint. ProofCast never picks the model, so you're never locked in and never surprised by a swap.
-- **Set up by the agent you already use.** No config marathon. You open the project in your coding agent, say *"configure proofcast,"* and answer exactly one question: the bot's name.
-- **A slow model can't hang the line.** A wall-clock backstop plus one retry keep every proof bounded — it either lands fast or fails fast with a reason, never spins forever.
-- **It learns from its own mistakes.** Every failure is remembered (redacted) and fed back into the next prompt, so ProofCast doesn't trip on the same rock twice.
-- **Glass box, not black box.** The engine narrates its reasoning to `proofcast-live.md` as it goes. When something breaks, you read exactly where it stood.
-- **Secure by construction.** The Telegram token is git-ignored the instant it's written; every deploy argument is validated against injection before a command exists; secrets are masked before they touch disk.
-- **Fast enough to stay in flow.** A proof is generated, recorded, and in your chat in well under a minute — delivered the moment it's encoded.
+- **Evidence over assertion.** A recording of it working beats a paragraph claiming it does.
+- **Autonomy, with a checkpoint.** The agent does the whole job — and stops at the one place a mistake is expensive.
+- **Deploy is earned, not assumed.** Production is gated on proof, and the gate has no bypass.
+- **Your model, never ours.** ProofCast never pre-selects a provider or a model.
+- **Secrets never travel.** Keys stay in your environment; anything hitting disk is redacted first.
 
 ---
 
 ## Architecture
 
 ```
-                         ┌─  ai         your model → a runnable feature (HTML)
-        ┌──── bot ───────┤
-setup ──┤  Démo / Déploie ├─  video      Playwright → real Chromium → MP4 proof
+                          ┌─  ai          orchestration: provider, memory, generation
+        ┌──── bot ────────┤
+setup ──┤  Démo / Déploie  ├─  video       Playwright → real Chromium → MP4 proof
         │  the deploy gate │
-onboarding                 ├─  deployer   vercel --prod, injection-checked
+onboarding                 ├─  deployer    vercel --prod, injection-checked
         │                  │
-path-resolver              └─  memory     live context + cross-session learning, redacted
-```
-
-**The `Démo` pipeline**
-
-```
-Démo "a signup page"
-   ├─ generate   your provider → a self-contained feature
-   ├─ run        drive it in a real browser
-   ├─ record     the real interaction → MP4
-   └─ deliver    the proof lands in Telegram      ▶ marks the session demo-ready
-```
-
-**The `Déploie` gate**
-
-```
-Déploie
-   ├─ proof this session?  ── no ──►  ✋ "Lance d'abord « Démo »."
-   └─ yes ─►  vercel --prod  ─►  ✅ production URL
+path-resolver              └─  memory      live reasoning + cross-session learning, redacted
 ```
 
 | Module | Responsibility |
 |---|---|
 | `bot` | Telegraf control surface; `Démo` / `Déploie`; enforces the deploy gate |
-| `ai` | Multi-provider feature generation (Anthropic / OpenAI / custom); HTML extraction |
+| `ai` | Multi-provider orchestration (Anthropic / OpenAI / custom); memory injection; HTML extraction |
 | `video` | Local server + Playwright recording → MP4; feature-adaptive demo |
 | `deployer` | `vercel --yes --prod`, URL extraction, argument injection guard |
 | `onboarding` | Bot naming, BotFather link, token persistence (git-ignored) |
 | `path-resolver` | Safe, in-project folder resolution |
-| `memory` | Live context + project-scoped learning, always redacted |
+| `memory` | Live reasoning + project-scoped learning, always redacted |
 | `setup` | Readiness checks + next-action reporting |
 
 ---
 
 ## Quickstart
 
-ProofCast is configured **by an AI coding agent**, not by hand.
+ProofCast is bootstrapped **by an AI coding agent**, then runs on its own.
 
 1. **Open the project** in your agent — Claude Code, Codex, or Cursor.
-2. **Say `configure proofcast`.** The agent reads [AGENTS.md](AGENTS.md), runs `npm run setup` (install, build, Chromium, readiness report), and drives the rest.
-3. **Answer one question** — the bot's name — then paste the token BotFather gives you and finish the Vercel browser login when asked.
-4. **Drive it from Telegram:** send `Démo` for a proof, `Déploie` to ship.
+2. **Say `configure proofcast`.** The agent reads [AGENTS.md](AGENTS.md), runs `npm run setup`, and drives the rest.
+3. **Answer one question** — the bot's name — paste the token BotFather gives you, and finish the Vercel browser login when asked.
+4. **Command it from Telegram:** `Démo` for a proof, `Déploie` to ship.
 
-You bring **one AI provider** (ProofCast never pre-selects a model):
+You bring **one AI provider** (the model is never pre-selected):
 
 ```bash
 # Anthropic
@@ -206,7 +204,7 @@ await startBot();                            // reads the token, resets live con
 
 ## The agent's operating manual
 
-ProofCast is unusual: it's operated by an AI agent, so it ships the agent a short list of things it must **never** do — because they're the things only a human can. These are hard rules, and they're mirrored in [AGENTS.md](AGENTS.md) / [CLAUDE.md](CLAUDE.md).
+Because ProofCast is operated by an AI agent, it ships that agent a short list of things it must **never** do — the things only a human can. Hard rules, mirrored in [AGENTS.md](AGENTS.md) / [CLAUDE.md](CLAUDE.md).
 
 - **You cannot complete a browser OAuth flow for the user.** For `vercel login`, open it, then **WAIT** for the user to say **"j'ai terminé la connexion."** Never poll in a loop; never proceed alone.
 - **Ask the user for exactly ONE thing: the bot name.** Nothing else.
@@ -225,18 +223,18 @@ const dir = await resolveTargetDirectory("travaille sur le dossier example");
 
 It scans the project (skipping `node_modules`, `.git`, `dist`, …), picks the shallowest case-insensitive match, and **stays inside the project** — `../` and absolute paths in the hint are neutralized, never resolved. No match? It creates and returns `./proofcast-workspace`.
 
-### Transparency & debugging
+### Transparent reasoning
 
-The bot writes its reasoning, in real time, to **`proofcast-live.md`** (reset each session, every line redacted). When it crashes, the user says **"lis le contexte de proofcast et corrige"** and you read the state at the moment it fell over:
+The agent writes its reasoning, in real time, to **`proofcast-live.md`** (reset each session, every line redacted). When it crashes, the user says **"lis le contexte de proofcast et corrige"** and you read the state at the moment it fell over:
 
 ```ts
 import { getSessionContext } from "proofcast";
 const state = getSessionContext(); // full contents of proofcast-live.md
 ```
 
-### Memory
+### Persistent memory
 
-The bot learns across sessions from project-scoped memory at **`~/.proofcast/memory/<hash>.md`** (two projects never mix). Recent entries are injected back into the AI prompt, so mistakes aren't repeated — redacted before writing, capped so they never bloat a prompt.
+The agent learns across sessions from project-scoped memory at **`~/.proofcast/memory/<hash>.md`** (two projects never mix). Recent entries are injected back into the prompt, so mistakes aren't repeated — redacted before writing, capped so they never bloat a prompt.
 
 > **Never delete this file between sessions.** It's the accumulated learning.
 
@@ -244,17 +242,17 @@ The bot learns across sessions from project-scoped memory at **`~/.proofcast/mem
 
 ## Vision
 
-Today, ProofCast proves one thing well: a **web feature, recorded in a real browser, before a Vercel deploy.**
+Today, ProofCast is an autonomous agent that builds a **web feature, proves it in a real browser, and ships it to Vercel** — governed by proof before deploy.
 
-The principle underneath is bigger than any single stack. As software starts to *write and ship itself*, the scarce resource stops being code and becomes **trust** — a reason to believe an autonomous action did what it claimed. The answer isn't slower agents. It's a receipt.
+The principle underneath is bigger than any single stack. As software starts to write and ship itself, the scarce resource stops being code and becomes **trust** — a reason to believe an autonomous action did what it claimed. The answer isn't slower agents. It's a receipt.
 
-We think that becomes infrastructure. A world where *"the agent says it's done"* is replaced by *"here's the proof it's done."* Where every deploy, every migration, every irreversible action an AI takes carries evidence a human can watch in seconds and a system can verify in milliseconds.
+We think that becomes infrastructure: a world where *"the agent says it's done"* is replaced by *"here's the proof it's done"* — where every deploy, migration, and irreversible action an AI takes carries evidence a human can watch in seconds and a system can verify in milliseconds.
 
-ProofCast is the first brick: the proof-of-work layer between a model and the real world.
+ProofCast is the first brick: the proof-of-work layer between an autonomous agent and the real world.
 
 ### Roadmap
 
-Directions, not promises — and clearly not shipped yet:
+Directions, not promises — clearly not shipped yet:
 
 - **More proof surfaces** beyond the browser: API calls, CLIs, background jobs.
 - **Assertions on the recording** — *"the page reached this state"* — so a proof can fail, not just be watched.
@@ -270,13 +268,13 @@ ProofCast is young. Here's exactly what's exercised for real versus mocked — n
 
 | Area | For real | Mocked / gated |
 |---|---|---|
-| Video recording + MP4 transcode | ✅ real Chromium + ffmpeg | — |
+| Real-browser recording + MP4 transcode | ✅ real Chromium + ffmpeg | — |
 | Navigation · memory · onboarding | ✅ real file operations | — |
-| AI feature generation | — | mocked providers (`npm run test:live` for real) |
+| AI orchestration | — | mocked providers (`npm run test:live` for real) |
 | Vercel deploy | — | mocked `execSync` |
 | Telegram send + bot launch | — | mocked handlers |
 
-The full real pipeline (real model → real Telegram → real deploy) runs under **`npm run test:live`**, gated behind `PROOFCAST_LIVE=1` and your own credentials.
+The full autonomous pipeline (real model → real Telegram → real deploy) runs under **`npm run test:live`**, gated behind `PROOFCAST_LIVE=1` and your own credentials.
 
 ---
 
