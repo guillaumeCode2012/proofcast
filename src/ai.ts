@@ -14,8 +14,10 @@
  * directly (see src/video.ts).
  */
 
-import Anthropic from "@anthropic-ai/sdk";
-import OpenAI from "openai";
+// Type-only: the SDKs are heavy (~12–13 MB RSS each) and only ONE provider is
+// ever used per install, so the real modules are loaded lazily at first call.
+import type Anthropic from "@anthropic-ai/sdk";
+import type OpenAI from "openai";
 
 import { readRecentMemory } from "./memory.js";
 
@@ -138,13 +140,14 @@ export function createAnthropicProvider(config: AnthropicProviderConfig = {}): A
     name: "anthropic",
     async generateFeature(description, options = {}) {
       const model = requireModel(config.model ?? options.model, "ANTHROPIC_MODEL");
-      const client =
-        config.client ??
-        new Anthropic({
-          apiKey: requireApiKey(config.apiKey, "ANTHROPIC_API_KEY"),
-          timeout: aiTimeoutMs(),
-          maxRetries: 1,
-        });
+      let client = config.client;
+      if (!client) {
+        // Validate the key BEFORE loading the SDK, then lazy-load it: the
+        // module costs ~12 MB RSS and is only needed on this provider's path.
+        const apiKey = requireApiKey(config.apiKey, "ANTHROPIC_API_KEY");
+        const { default: AnthropicSdk } = await import("@anthropic-ai/sdk");
+        client = new AnthropicSdk({ apiKey, timeout: aiTimeoutMs(), maxRetries: 1 });
+      }
 
       const response = await client.messages.create({
         model,
@@ -175,14 +178,18 @@ export function createOpenAiProvider(config: OpenAiProviderConfig = {}): AiProvi
     name: "openai",
     async generateFeature(description, options = {}) {
       const model = requireModel(config.model ?? options.model, "OPENAI_MODEL");
-      const client =
-        config.client ??
-        new OpenAI({
-          apiKey: requireApiKey(config.apiKey, "OPENAI_API_KEY"),
+      let client = config.client;
+      if (!client) {
+        // Same lazy pattern as the Anthropic provider (~13 MB RSS deferred).
+        const apiKey = requireApiKey(config.apiKey, "OPENAI_API_KEY");
+        const { default: OpenAiSdk } = await import("openai");
+        client = new OpenAiSdk({
+          apiKey,
           baseURL: config.baseURL ?? process.env.OPENAI_BASE_URL,
           timeout: aiTimeoutMs(),
           maxRetries: 1,
         });
+      }
 
       const completion = await client.chat.completions.create({
         model,
@@ -261,20 +268,45 @@ export async function generateFeature(
 }
 
 /**
+ * Hard cap (chars) on the memory block injected into the system prompt —
+ * roughly 500 tokens. Without it, a few long error entries in memory would
+ * silently inflate the input tokens of EVERY subsequent generation.
+ */
+export const MAX_MEMORY_PROMPT_CHARS = 2000;
+
+/**
  * Inject the last 10 (already-redacted) memory lines into the system prompt so
- * the model learns from prior sessions. Returns `options.system` unchanged when
+ * the model learns from prior sessions, capped at {@link MAX_MEMORY_PROMPT_CHARS}
+ * (whole lines, most recent kept first). Returns `options.system` unchanged when
  * memory is disabled or empty.
  */
 function buildSystemPromptWithMemory(options: GenerateFeatureOptions): string | undefined {
   if (options.memory === false) {
     return options.system;
   }
-  const recent = readRecentMemory(10, options.memory ?? {});
+  const recent = capLines(readRecentMemory(10, options.memory ?? {}), MAX_MEMORY_PROMPT_CHARS);
   if (recent.trim().length === 0) {
     return options.system;
   }
   const base = options.system ?? DEFAULT_SYSTEM_PROMPT;
   return `${base}\n\n## Recent ProofCast context (last actions, redacted)\n${recent}`;
+}
+
+/** Keep whole lines from the END (most recent) of `text` within `maxChars`. */
+function capLines(text: string, maxChars: number): string {
+  if (text.length <= maxChars) {
+    return text;
+  }
+  const kept: string[] = [];
+  let budget = maxChars;
+  for (const line of text.split("\n").reverse()) {
+    // +1 for the newline that rejoins the lines.
+    if (line.length + 1 > budget) break;
+    kept.unshift(line);
+    budget -= line.length + 1;
+  }
+  // Degenerate case (first line alone exceeds the budget): hard-truncate it.
+  return kept.length > 0 ? kept.join("\n") : text.slice(-maxChars);
 }
 
 /** Pick a provider name from whichever API key is present. */

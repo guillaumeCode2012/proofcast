@@ -27,6 +27,13 @@ export const LIVE_FILENAME = "proofcast-live.md";
 /** Default cap on the number of memory entries retained. */
 export const DEFAULT_MAX_MEMORY_LINES = 200;
 
+/**
+ * Cap on a single memory entry (chars). Entries are injected verbatim into AI
+ * system prompts (see src/ai.ts), so an unbounded one — e.g. a huge error
+ * message — would inflate the input tokens of every later generation.
+ */
+export const MAX_MEMORY_ENTRY_CHARS = 400;
+
 export interface LiveOptions {
   /** Project directory holding `proofcast-live.md` (defaults to `process.cwd()`). */
   cwd?: string;
@@ -137,7 +144,10 @@ export function writeMemory(entry: string, options: MemoryOptions = {}): void {
   const file = memoryFilePath(options);
   mkdirSync(dirname(file), { recursive: true });
 
-  const safeEntry = redactSecrets(String(entry)).trim().replace(/\r?\n/g, " ");
+  let safeEntry = redactSecrets(String(entry)).trim().replace(/\r?\n/g, " ");
+  if (safeEntry.length > MAX_MEMORY_ENTRY_CHARS) {
+    safeEntry = `${safeEntry.slice(0, MAX_MEMORY_ENTRY_CHARS)}… [truncated]`;
+  }
   const line = `- [${new Date().toISOString()}] ${safeEntry}`;
 
   const existing = existsSync(file) ? readFileSync(file, "utf8") : "";

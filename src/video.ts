@@ -24,7 +24,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 
-import { chromium } from "playwright";
+// Type-only: playwright costs ~78 MB RSS when loaded, but it is only needed
+// during the few seconds of an actual recording — so recordDemo() lazy-loads
+// it on first use instead of making every `import "proofcast"` pay for it.
 import type { Browser, BrowserContext, Page } from "playwright";
 
 const execFileAsync = promisify(execFile);
@@ -312,6 +314,8 @@ export async function recordDemo(options: RecordDemoOptions = {}): Promise<DemoR
     }
 
     const outDir = await mkdtemp(join(tmpdir(), "proofcast-demo-"));
+    // Lazy-load playwright here (first demo only; cached by Node afterwards).
+    const { chromium } = await import("playwright");
     browser = await chromium.launch();
     context = await browser.newContext({
       viewport,
