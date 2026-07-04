@@ -48,3 +48,37 @@ test("README APPRENTISSAGE: project-scoped memory, never delete", () => {
   requires("project-scoped memory path", /~\/\.proofcast\/memory/);
   requires("never delete between sessions", /Never delete this file between sessions/i);
 });
+
+test("README AI CONFIG: documents the dual-mode contract (both branches)", () => {
+  requires("dual-mode config section", /AI configuration/i);
+  requires("aiMode key", /aiMode/);
+  requires("API branch", /API_KEY/);
+  requires("Subscription branch", /AGENT_SUBSCRIPTION/);
+  requires("written to the config file", /\.proofcast-config\.json/);
+  requires("asks the user which mode", /clé API Anthropic.*abonnement/is);
+});
+
+test("README AI CONFIG: documents EXACTLY the implemented commands (run + generate)", () => {
+  // These must match what 13.1–13.3 actually shipped.
+  requires("run command with dirPath", /proofcast run <dirPath>/);
+  requires("generate command with description + dirPath", /proofcast generate "<description>" <dirPath>/);
+  // …and must NOT resurrect a command that no longer exists.
+  assert.doesNotMatch(README, /proofcast resume/i, "no phantom 'resume' command");
+});
+
+test("README AI CONFIG: subscription = no AI call (agent owns repair); API = self-heal up to 3", () => {
+  requires("subscription makes no LLM call", /no LLM call/i);
+  requires("the agent owns the fix loop", /all code repair is your responsibility/i);
+  requires("run reports the proof path", /proofPath/);
+  requires("run failure tells the agent to fix the files", /fix the affected files/i);
+  requires("API mode self-repairs up to 3 attempts", /up to 3 attempts/i);
+  requires("exit code + JSON contract", /exit code/i);
+});
+
+test("README: no trace of the abandoned file-handoff / exchange-file mechanism", () => {
+  assert.doesNotMatch(
+    README,
+    /handoff file|handoff par fichier|exchange file|fichier d'échange|\bresume\b/i,
+    "the file-handoff mechanism and the resume command were abandoned in favor of the CLI contract",
+  );
+});

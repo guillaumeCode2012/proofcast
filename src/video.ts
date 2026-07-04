@@ -389,7 +389,7 @@ export async function recordDemo(options: RecordDemoOptions = {}): Promise<DemoR
 }
 
 /** Result of transcoding: the MP4 path and its duration in whole seconds. */
-interface TranscodeResult {
+export interface TranscodeResult {
   mp4Path: string;
   /** Clip duration in seconds (>=1), for the Telegram `duration` hint. */
   durationSec: number;
@@ -403,8 +403,11 @@ interface TranscodeResult {
  * `-crf 28` keeps a short screen recording small (fast to upload and for
  * Telegram to process), and the clip duration is read straight from ffmpeg's
  * stderr so callers can pass it to Telegram (no separate `ffprobe` needed).
+ *
+ * Exported so the self-heal orchestrator (src/orchestrator.ts) can record a
+ * proof video against a running server without duplicating the ffmpeg pipeline.
  */
-async function transcodeToMp4(webmPath: string): Promise<TranscodeResult> {
+export async function transcodeToMp4(webmPath: string): Promise<TranscodeResult> {
   if (!ffmpegPath) {
     throw new Error(
       "ffmpeg binary not found (ffmpeg-static). Cannot produce the MP4 demo.",

@@ -1,19 +1,19 @@
 /**
  * ProofCast smart navigation.
  *
- * Turns a natural-language hint ("travaille dans le dossier example") into an
- * absolute directory path — WITHOUT ever leaving the project root.
- *
- * Security (OBLIGATOIRE):
- *   - Suspicious hints (`../`, absolute paths) are NEUTRALIZED before searching:
- *     only a single safe final segment is kept — never resolved as-is.
- *   - The scan only walks inside the CWD, and the returned path is double-checked
- *     to stay within it (`path.relative(cwd, result)` never starts with `..`).
+ * Two resolvers, two trust models:
+ *   - {@link resolveTargetDirectory} — a natural-language hint → a directory that
+ *     is GUARANTEED to stay inside the project root (the safe, name-based search).
+ *   - {@link resolveAnyDirectory} — lets the user target an EXISTING project
+ *     ANYWHERE on the machine via an explicit path (absolute / `~` / relative),
+ *     falling back to the project-scoped search for a bare name. Used by the bot
+ *     so a "Démo" can run against a real codebase outside ProofCast.
  *
  * Performance: heavy/noisy directories are excluded from the recursive scan.
  */
 
-import { mkdirSync, readdirSync } from "node:fs";
+import { mkdirSync, readdirSync, statSync } from "node:fs";
+import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
 
 /** Thrown if a resolved path would escape the project root (defense-in-depth). */
@@ -136,4 +136,86 @@ export async function resolveTargetDirectory(
     throw new PathEscapeError(candidate);
   }
   return resolved;
+}
+
+/** Thrown when an explicitly-specified directory does not exist (or isn't a dir). */
+export class DirectoryNotFoundError extends Error {
+  constructor(path: string) {
+    super(`Directory not found (or not a directory): ${JSON.stringify(path)}`);
+    this.name = "DirectoryNotFoundError";
+  }
+}
+
+/**
+ * Resolve a hint to a target directory that may live ANYWHERE on the machine.
+ *
+ *   - A PATH-LIKE hint (absolute, `~`, `./`, `../`, `/…`, `X:\…`, or anything
+ *     containing a separator) is used DIRECTLY — it is intentionally NOT confined
+ *     to the project — after verifying it points at an existing directory.
+ *   - A bare NAME/phrase falls back to the project-scoped {@link resolveTargetDirectory}
+ *     (you cannot sanely search the whole disk by name).
+ *
+ * Returns `null` for an empty hint so the caller can treat that as "no target"
+ * (e.g. greenfield generation).
+ *
+ * @throws {DirectoryNotFoundError} if a path-like hint doesn't resolve to a directory.
+ */
+export async function resolveAnyDirectory(
+  hint: string,
+  options: { cwd?: string } = {},
+): Promise<string | null> {
+  const cwd = resolve(options.cwd ?? process.cwd());
+  const raw = stripQuotes((hint ?? "").trim());
+  if (raw.length === 0) {
+    return null;
+  }
+
+  if (isPathLikeHint(raw)) {
+    const expanded = expandHome(raw);
+    const abs = isAbsolute(expanded) ? resolve(expanded) : resolve(cwd, expanded);
+    if (isExistingDirectory(abs)) {
+      return abs;
+    }
+    throw new DirectoryNotFoundError(abs);
+  }
+
+  // Bare name → safe, project-scoped search (never escapes the project).
+  return resolveTargetDirectory(raw, { cwd });
+}
+
+/** Strip a single layer of surrounding quotes/backticks. */
+export function stripQuotes(value: string): string {
+  return value.replace(/^["'`]+/, "").replace(/["'`]+$/, "");
+}
+
+/**
+ * True when a hint should be treated as an explicit filesystem PATH (absolute,
+ * Windows drive, `~`, or containing a separator) rather than a bare name. Callers
+ * use this to decide whether a token is a real path target vs. plain prose.
+ */
+export function isPathLikeHint(value: string): boolean {
+  return (
+    isAbsolute(value) ||
+    /^[a-zA-Z]:[\\/]/.test(value) || // Windows drive (C:\ or C:/)
+    value.startsWith("~") ||
+    value.includes("/") ||
+    value.includes("\\")
+  );
+}
+
+/** Expand a leading `~` to the user's home directory. */
+function expandHome(value: string): string {
+  if (value === "~" || value.startsWith("~/") || value.startsWith("~\\")) {
+    return join(homedir(), value.slice(1));
+  }
+  return value;
+}
+
+/** True if `p` exists and is a directory (never throws). */
+function isExistingDirectory(p: string): boolean {
+  try {
+    return statSync(p).isDirectory();
+  } catch {
+    return false;
+  }
 }

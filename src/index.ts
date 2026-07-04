@@ -18,7 +18,12 @@
 export const PROOFCAST_VERSION = "0.1.0";
 
 export * from "./onboarding.js";
+export * from "./config.js";
 export * from "./ai.js";
+export * from "./context-analyzer.js";
+export * from "./orchestrator.js";
+export * from "./prover.js";
+export * from "./sandbox.js";
 export * from "./video.js";
 export * from "./deployer.js";
 export * from "./bot.js";

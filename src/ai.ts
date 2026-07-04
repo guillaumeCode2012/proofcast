@@ -19,6 +19,7 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import type OpenAI from "openai";
 
+import { analyzeTargetDirectory } from "./context-analyzer.js";
 import { readRecentMemory } from "./memory.js";
 
 /**
@@ -50,6 +51,41 @@ export const DEFAULT_SYSTEM_PROMPT =
   "that clearly shows the feature working, concise inline CSS, and only the JS the " +
   "demo needs — no placeholder filler, no long copy, no unrelated sections. Output " +
   "only the HTML document — no markdown fences, no explanation.";
+
+/**
+ * System prompt for BROWNFIELD generation (modifying an existing project). Unlike
+ * the greenfield prompt, the model must return a JSON array of per-file changes,
+ * reuse existing files instead of recreating them, and leave unrelated code alone.
+ */
+export const BROWNFIELD_SYSTEM_PROMPT =
+  "You are a senior engineer inside ProofCast working in BROWNFIELD mode on an " +
+  "EXISTING project. You are given the current project (a file tree and file " +
+  "contents) and a change request. Rules: (1) If the feature already lives in a " +
+  "file, MODIFY that file — do NOT create a new file for it. (2) Return ONLY a " +
+  "JSON array where each element is {\"path\": string, \"action\": \"modify\" | " +
+  "\"create\", \"content\": string}. \"modify\" = an existing file you are " +
+  "rewriting in full; \"create\" = a genuinely new file. \"content\" is the " +
+  "COMPLETE new content of that file. (3) Preserve ALL code unrelated to the " +
+  "request — change only what the feature needs. (4) Include only the files you " +
+  "actually change. Output only the JSON array — no markdown fences, no prose.";
+
+/** One file-level change returned by the model in brownfield mode. */
+export interface FileChange {
+  /** Path of the file, relative to the target directory. */
+  path: string;
+  /** `modify` an existing file, or `create` a genuinely new one. */
+  action: "modify" | "create";
+  /** The complete new content of the file. */
+  content: string;
+}
+
+/** Thrown when a brownfield response is not a valid `FileChange[]` JSON array. */
+export class InvalidBrownfieldResponseError extends Error {
+  constructor(reason: string) {
+    super(`The model did not return a valid brownfield change set: ${reason}.`);
+    this.name = "InvalidBrownfieldResponseError";
+  }
+}
 
 /** Resolve the per-call AI timeout from the environment, falling back to the default. */
 function aiTimeoutMs(): number {
@@ -241,6 +277,13 @@ export interface GenerateFeatureOptions extends ProviderCallOptions {
    * object overrides where memory is read from; default reads the project memory.
    */
   memory?: false | { cwd?: string; homeDir?: string };
+  /**
+   * BROWNFIELD mode. When set, the existing project at this path is analyzed
+   * (see {@link analyzeTargetDirectory}) and injected into the prompt, and the
+   * model is asked to return a per-file change set ({@link FileChange}[]) instead
+   * of a single HTML document. When omitted, generation is greenfield (unchanged).
+   */
+  targetDir?: string;
 }
 
 /**
@@ -260,10 +303,82 @@ export async function generateFeature(
     throw new TypeError("Feature description is required and must be a non-empty string.");
   }
   const provider = resolveProvider(options.provider);
+
+  // Brownfield: analyze the existing project first, inject it into the prompt,
+  // and switch the model to the change-set contract. Greenfield is unchanged.
+  if (options.targetDir !== undefined) {
+    const context = await analyzeTargetDirectory(options.targetDir);
+    return provider.generateFeature(buildBrownfieldUserMessage(description, context), {
+      model: options.model,
+      maxTokens: options.maxTokens,
+      system: buildSystemPromptWithMemory(options, BROWNFIELD_SYSTEM_PROMPT),
+    });
+  }
+
   return provider.generateFeature(description, {
     model: options.model,
     maxTokens: options.maxTokens,
     system: buildSystemPromptWithMemory(options),
+  });
+}
+
+/** Assemble the user turn for a brownfield generation: the project, then the ask. */
+function buildBrownfieldUserMessage(description: string, context: string): string {
+  return (
+    "Here is the existing project you must modify. Reuse and edit these files; " +
+    "do not recreate what already exists.\n\n" +
+    `${context}\n\n## Requested change\n${description}`
+  );
+}
+
+/**
+ * Parse a brownfield model response into a validated {@link FileChange}[].
+ * Tolerates a ```json fence or surrounding prose by isolating the outermost
+ * JSON array. Throws {@link InvalidBrownfieldResponseError} on anything invalid.
+ */
+export function parseBrownfieldResponse(text: string): FileChange[] {
+  if (typeof text !== "string" || text.trim().length === 0) {
+    throw new InvalidBrownfieldResponseError("empty response");
+  }
+
+  let body = text.trim();
+  const fenced = body.match(/```(?:json)?\s*\n?([\s\S]*?)```/i);
+  if (fenced?.[1]) {
+    body = fenced[1].trim();
+  }
+  const start = body.indexOf("[");
+  const end = body.lastIndexOf("]");
+  if (start < 0 || end < start) {
+    throw new InvalidBrownfieldResponseError("no JSON array found");
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body.slice(start, end + 1));
+  } catch (err) {
+    throw new InvalidBrownfieldResponseError(
+      `invalid JSON (${err instanceof Error ? err.message : String(err)})`,
+    );
+  }
+  if (!Array.isArray(parsed)) {
+    throw new InvalidBrownfieldResponseError("top-level value is not an array");
+  }
+
+  return parsed.map((raw, i) => {
+    if (typeof raw !== "object" || raw === null) {
+      throw new InvalidBrownfieldResponseError(`element ${i} is not an object`);
+    }
+    const { path, action, content } = raw as Record<string, unknown>;
+    if (typeof path !== "string" || path.trim().length === 0) {
+      throw new InvalidBrownfieldResponseError(`element ${i} has an invalid "path"`);
+    }
+    if (action !== "modify" && action !== "create") {
+      throw new InvalidBrownfieldResponseError(`element ${i} has an invalid "action"`);
+    }
+    if (typeof content !== "string") {
+      throw new InvalidBrownfieldResponseError(`element ${i} has an invalid "content"`);
+    }
+    return { path, action, content };
   });
 }
 
@@ -280,15 +395,18 @@ export const MAX_MEMORY_PROMPT_CHARS = 2000;
  * (whole lines, most recent kept first). Returns `options.system` unchanged when
  * memory is disabled or empty.
  */
-function buildSystemPromptWithMemory(options: GenerateFeatureOptions): string | undefined {
+function buildSystemPromptWithMemory(
+  options: GenerateFeatureOptions,
+  defaultPrompt: string = DEFAULT_SYSTEM_PROMPT,
+): string | undefined {
   if (options.memory === false) {
-    return options.system;
+    return options.system ?? defaultPrompt;
   }
   const recent = capLines(readRecentMemory(10, options.memory ?? {}), MAX_MEMORY_PROMPT_CHARS);
+  const base = options.system ?? defaultPrompt;
   if (recent.trim().length === 0) {
-    return options.system;
+    return base;
   }
-  const base = options.system ?? DEFAULT_SYSTEM_PROMPT;
   return `${base}\n\n## Recent ProofCast context (last actions, redacted)\n${recent}`;
 }
 

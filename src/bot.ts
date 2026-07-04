@@ -15,7 +15,7 @@
  * `runDeployCommand`) so it can be tested without any network.
  */
 
-import { Telegraf } from "telegraf";
+import { Markup, Telegraf } from "telegraf";
 import type { Context } from "telegraf";
 
 import { extractHtmlDocument, generateFeature as defaultGenerateFeature } from "./ai.js";
@@ -26,6 +26,14 @@ import {
   writeMemory as defaultWriteMemory,
 } from "./memory.js";
 import { loadToken } from "./onboarding.js";
+import { executeAndHeal as defaultExecuteAndHeal } from "./orchestrator.js";
+import {
+  DirectoryNotFoundError,
+  isPathLikeHint,
+  resolveAnyDirectory as defaultResolveAnyDirectory,
+  stripQuotes,
+} from "./path-resolver.js";
+import { isDockerAvailable as defaultIsDockerAvailable } from "./sandbox.js";
 import { recordDemo as defaultRecordDemo } from "./video.js";
 
 /** Dependencies the handlers use — injectable so tests avoid real AI/video/deploy. */
@@ -33,6 +41,12 @@ export interface BotDependencies {
   generateFeature: typeof defaultGenerateFeature;
   recordDemo: typeof defaultRecordDemo;
   deployWithVercel: typeof defaultDeployWithVercel;
+  /** Brownfield self-heal on an existing project (used when a target folder is given). */
+  executeAndHeal: typeof defaultExecuteAndHeal;
+  /** Resolve a folder hint (path anywhere, or a project-scoped name) to a directory. */
+  resolveAnyDirectory: typeof defaultResolveAnyDirectory;
+  /** Whether a usable Docker daemon is available (sandbox vs. local fallback). */
+  isDockerAvailable: typeof defaultIsDockerAvailable;
   /** Append a redacted reasoning entry to proofcast-live.md. */
   logLiveContext: (step: string, details: string) => void;
   /** Persist a redacted entry to the project-scoped memory (fatal errors). */
@@ -43,15 +57,27 @@ const DEFAULT_DEPS: BotDependencies = {
   generateFeature: defaultGenerateFeature,
   recordDemo: defaultRecordDemo,
   deployWithVercel: defaultDeployWithVercel,
+  executeAndHeal: defaultExecuteAndHeal,
+  resolveAnyDirectory: defaultResolveAnyDirectory,
+  isDockerAvailable: defaultIsDockerAvailable,
   logLiveContext: defaultLogLiveContext,
   writeMemory: defaultWriteMemory,
 };
+
+/** Where the user can learn to install Docker (the fallback message's button). */
+export const DOCKER_INSTALL_URL = "https://docs.docker.com/get-docker/";
+
+/** Options for a text reply (optionally with a single inline URL button). */
+export interface ReplyOptions {
+  /** Render one inline URL button under the message. */
+  buttonUrl?: { text: string; url: string };
+}
 
 /** Minimal context the handlers need (a small, mockable subset of Telegraf's Context). */
 export interface DemoContext {
   chatId: number | string;
   text: string;
-  reply(text: string): Promise<unknown>;
+  reply(text: string, options?: ReplyOptions): Promise<unknown>;
   replyWithVideo(
     video: { source: Buffer; filename?: string },
     extra?: VideoExtra,
@@ -90,8 +116,38 @@ export const DEPLOY_KEYWORD = /^d[ée]ploie\b/i;
 const DEFAULT_FEATURE_DESCRIPTION = "a minimal self-contained demo web page";
 
 /**
- * Handle a "Démo" command: generate the feature, record the proof video, send
- * the MP4, and mark the chat demo-ready. Never throws — failures are reported.
+ * Separator between an optional target folder and the description:
+ * `Démo <folder> | <description>`. A pipe is unambiguous even with Windows
+ * `C:\…` paths (which contain a `:`). No pipe → greenfield generation.
+ */
+export const DEMO_FOLDER_SEPARATOR = "|";
+
+/**
+ * Split a "Démo" message into an optional target folder and a description.
+ * A target is recognized ONLY when the part before the pipe is an explicit,
+ * path-like location — so a stray `|` in a plain description stays greenfield:
+ *   `Démo /path/to/app | add a reset button` → folder + description (brownfield)
+ *   `Démo ./app | add a button`              → folder + description (brownfield)
+ *   `Démo a page with A | B options`         → no folder, `|` kept literal (greenfield)
+ *   `Démo a login page`                      → no folder (greenfield)
+ */
+export function parseDemoText(text: string): { folderHint: string | null; description: string } {
+  const tail = (DEMO_KEYWORD.exec(text)?.[1] ?? "").trim();
+  const sep = tail.indexOf(DEMO_FOLDER_SEPARATOR);
+  if (sep !== -1) {
+    const candidate = stripQuotes(tail.slice(0, sep).trim());
+    if (candidate.length > 0 && isPathLikeHint(candidate)) {
+      return { folderHint: candidate, description: tail.slice(sep + 1).trim() };
+    }
+  }
+  return { folderHint: null, description: tail };
+}
+
+/**
+ * Handle a "Démo" command. With a target folder it runs the brownfield self-heal
+ * pipeline on an existing project; otherwise it generates a self-contained demo
+ * from scratch. Either way it records a proof, sends the MP4, and marks the chat
+ * demo-ready. Never throws — failures are reported to the user.
  */
 export async function runDemoCommand(
   ctx: DemoContext,
@@ -99,37 +155,136 @@ export async function runDemoCommand(
   deps: BotDependencies = DEFAULT_DEPS,
 ): Promise<void> {
   try {
-    const description = (DEMO_KEYWORD.exec(ctx.text)?.[1] ?? "").trim() || DEFAULT_FEATURE_DESCRIPTION;
-    deps.logLiveContext("demo", `requested: ${description}`);
+    const { folderHint, description: parsed } = parseDemoText(ctx.text);
+    const description = parsed || DEFAULT_FEATURE_DESCRIPTION;
 
-    await ctx.reply("🎬 Génération de la feature…");
-    // Real models often wrap the HTML in ```fences``` — extract a servable doc.
-    const html = extractHtmlDocument(await deps.generateFeature(description));
-    deps.logLiveContext("demo", "feature generated");
-
-    await ctx.reply("🎥 Enregistrement de la preuve vidéo…");
-    const demo = await deps.recordDemo({ html });
-    deps.logLiveContext("demo", `proof recorded (${demo.sizeBytes} bytes)`);
-
-    // Only mark demo-ready AFTER a successful recording.
-    state.demoReady = true;
-    await ctx.replyWithVideo(
-      { source: demo.video, filename: "proofcast-demo.mp4" },
-      {
-        caption: "✅ Preuve vidéo prête. Vérifie-la, puis envoie « Déploie ».",
-        // Metadata so Telegram delivers immediately (no probing / re-encoding).
-        width: demo.width,
-        height: demo.height,
-        duration: demo.durationSec,
-        supports_streaming: true,
-      },
-    );
+    if (folderHint) {
+      await runBrownfieldDemo(ctx, state, deps, folderHint, description);
+    } else {
+      await runGreenfieldDemo(ctx, state, deps, description);
+    }
   } catch (err) {
     state.demoReady = false;
     deps.logLiveContext("demo", `failed: ${errorMessage(err)}`);
     deps.writeMemory(`Démo failed: ${errorMessage(err)}`);
     await safeReply(ctx, `❌ Échec de la démo : ${errorMessage(err)}`);
   }
+}
+
+/** Greenfield: generate a self-contained HTML feature and record it. */
+async function runGreenfieldDemo(
+  ctx: DemoContext,
+  state: ChatState,
+  deps: BotDependencies,
+  description: string,
+): Promise<void> {
+  deps.logLiveContext("demo", `requested (greenfield): ${description}`);
+
+  await ctx.reply("🎬 Génération de la feature…");
+  // Real models often wrap the HTML in ```fences``` — extract a servable doc.
+  const html = extractHtmlDocument(await deps.generateFeature(description));
+  deps.logLiveContext("demo", "feature generated");
+
+  await ctx.reply("🎥 Enregistrement de la preuve vidéo…");
+  const demo = await deps.recordDemo({ html });
+  deps.logLiveContext("demo", `proof recorded (${demo.sizeBytes} bytes)`);
+
+  // Only mark demo-ready AFTER a successful recording.
+  state.demoReady = true;
+  await ctx.replyWithVideo(
+    { source: demo.video, filename: "proofcast-demo.mp4" },
+    {
+      caption: "✅ Preuve vidéo prête. Vérifie-la, puis envoie « Déploie ».",
+      // Metadata so Telegram delivers immediately (no probing / re-encoding).
+      width: demo.width,
+      height: demo.height,
+      duration: demo.durationSec,
+      supports_streaming: true,
+    },
+  );
+}
+
+/**
+ * Brownfield: resolve the target project (anywhere on the machine), then run the
+ * self-heal pipeline in a Docker sandbox — or, if Docker isn't available, fall
+ * back to local execution with a clear warning + an "install Docker" button.
+ */
+async function runBrownfieldDemo(
+  ctx: DemoContext,
+  state: ChatState,
+  deps: BotDependencies,
+  folderHint: string,
+  description: string,
+): Promise<void> {
+  deps.logLiveContext("demo", `requested (brownfield) on "${folderHint}": ${description}`);
+
+  let dir: string | null;
+  try {
+    dir = await deps.resolveAnyDirectory(folderHint);
+  } catch (err) {
+    if (err instanceof DirectoryNotFoundError) {
+      await ctx.reply(`🚫 Dossier introuvable : « ${folderHint} ». Vérifie le chemin puis réessaie.`);
+      return;
+    }
+    throw err;
+  }
+  if (!dir) {
+    await ctx.reply(
+      "🚫 Aucun dossier cible reconnu. Exemple : « Démo /chemin/vers/projet | ajoute un bouton reset ».",
+    );
+    return;
+  }
+  await ctx.reply(`📂 Projet cible : ${dir}`);
+
+  // Docker is OPTIONAL: sandbox if available, otherwise run on the host directly.
+  const dockerReady = deps.isDockerAvailable();
+  if (dockerReady) {
+    await ctx.reply("🐳 Docker détecté — exécution dans un conteneur isolé.");
+  } else {
+    await ctx.reply(
+      "⚠️ Docker non détecté. Les outils seront exécutés directement sur votre machine.",
+      { buttonUrl: { text: "Installer Docker (recommandé)", url: DOCKER_INSTALL_URL } },
+    );
+  }
+
+  await ctx.reply("🛠️ Génération, exécution et auto-réparation (jusqu'à 3 tentatives)…");
+  const result = await deps.executeAndHeal(description, dir, 3, {
+    execution: dockerReady ? "docker" : "local",
+  });
+
+  if (!result.success) {
+    state.demoReady = false;
+    deps.logLiveContext("demo", `heal failed after ${result.attempts} attempt(s): ${result.lastError ?? ""}`);
+    await ctx.reply(
+      `❌ Feature non fonctionnelle après ${result.attempts} tentative(s). ` +
+        `Dernière erreur : ${truncate(result.lastError ?? "inconnue", 300)}`,
+    );
+    return;
+  }
+
+  deps.logLiveContext("demo", `proof recorded (brownfield) in ${result.attempts} attempt(s)`);
+  state.demoReady = true;
+
+  if (result.video.length === 0) {
+    await ctx.reply(
+      `✅ La feature fonctionne (réparée en ${result.attempts} tentative(s)), mais aucune vidéo n'a été capturée.`,
+    );
+    return;
+  }
+  await ctx.replyWithVideo(
+    { source: result.video, filename: "proofcast-demo.mp4" },
+    {
+      caption: `✅ Preuve vidéo prête (${result.attempts} tentative(s)). Vérifie-la, puis envoie « Déploie ».`,
+      width: 1280,
+      height: 720,
+      supports_streaming: true,
+    },
+  );
+}
+
+/** Trim `value` to `max` chars, adding an ellipsis when cut. */
+function truncate(value: string, max: number): string {
+  return value.length > max ? `${value.slice(0, max)}…` : value;
 }
 
 /**
@@ -235,7 +390,15 @@ function adaptContext(ctx: Context): DemoContext {
   return {
     chatId: chatIdOf(ctx),
     text,
-    reply: (content) => ctx.reply(content),
+    reply: (content, options) => {
+      if (options?.buttonUrl) {
+        return ctx.reply(
+          content,
+          Markup.inlineKeyboard([Markup.button.url(options.buttonUrl.text, options.buttonUrl.url)]),
+        );
+      }
+      return ctx.reply(content);
+    },
     replyWithVideo: (video, extra) =>
       ctx.replyWithVideo(
         { source: video.source, filename: video.filename ?? "proofcast-demo.mp4" },

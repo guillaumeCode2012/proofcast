@@ -4,9 +4,13 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { join, relative } from "node:path";
 import { tmpdir } from "node:os";
 
+import { resolve } from "node:path";
+
 import {
+  DirectoryNotFoundError,
   FALLBACK_DIRNAME,
   extractFolderName,
+  resolveAnyDirectory,
   resolveTargetDirectory,
   sanitizeFolderName,
 } from "../dist/path-resolver.js";
@@ -102,4 +106,57 @@ test("resolveTargetDirectory neutralizes a malicious hint and never escapes the 
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("resolveAnyDirectory accepts an absolute path OUTSIDE the project (any folder)", async () => {
+  const project = mkdtempSync(join(tmpdir(), "proofcast-proj-"));
+  const external = mkdtempSync(join(tmpdir(), "proofcast-external-"));
+  try {
+    const result = await resolveAnyDirectory(external, { cwd: project });
+    assert.equal(result, resolve(external), "returns the external directory as-is");
+    assert.ok(
+      relative(project, result).startsWith(".."),
+      "the target is intentionally OUTSIDE the ProofCast project",
+    );
+  } finally {
+    rmSync(project, { recursive: true, force: true });
+    rmSync(external, { recursive: true, force: true });
+  }
+});
+
+test("resolveAnyDirectory resolves a relative path against the cwd", async () => {
+  const project = mkdtempSync(join(tmpdir(), "proofcast-proj-"));
+  mkdirSync(join(project, "app"), { recursive: true });
+  try {
+    const result = await resolveAnyDirectory("./app", { cwd: project });
+    assert.equal(result, resolve(project, "app"));
+  } finally {
+    rmSync(project, { recursive: true, force: true });
+  }
+});
+
+test("resolveAnyDirectory throws DirectoryNotFoundError for a path that doesn't exist", async () => {
+  const project = mkdtempSync(join(tmpdir(), "proofcast-proj-"));
+  const missing = join(tmpdir(), `proofcast-missing-${Date.now()}`);
+  try {
+    await assert.rejects(() => resolveAnyDirectory(missing, { cwd: project }), DirectoryNotFoundError);
+  } finally {
+    rmSync(project, { recursive: true, force: true });
+  }
+});
+
+test("resolveAnyDirectory falls back to the safe project search for a bare name", async () => {
+  const project = tempTree(["src/example"]);
+  try {
+    const result = await resolveAnyDirectory("example", { cwd: project });
+    assert.equal(relative(project, result), join("src", "example"));
+    assert.ok(!relative(project, result).startsWith(".."), "bare names stay inside the project");
+  } finally {
+    rmSync(project, { recursive: true, force: true });
+  }
+});
+
+test("resolveAnyDirectory returns null for an empty hint (greenfield)", async () => {
+  assert.equal(await resolveAnyDirectory(""), null);
+  assert.equal(await resolveAnyDirectory("   "), null);
 });
