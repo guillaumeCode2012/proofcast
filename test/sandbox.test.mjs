@@ -12,6 +12,7 @@ import {
   isDockerAvailable,
   startSandbox,
   stopSandbox,
+  runInSandbox,
 } from "../dist/sandbox.js";
 
 /** A fake dockerode client + container that records how it was driven. */
@@ -174,3 +175,107 @@ function dockerDaemonRunning() {
     return false;
   }
 }
+
+// ── runInSandbox (mock dockerode) ────────────────────────────────────────────
+
+/** A fake dockerode whose container runs ONE command to completion. */
+function mockRunDocker({ statusCode = 0, hang = false, logs = "hello\n" } = {}) {
+  let resolveWait;
+  const waitPromise = new Promise((res) => {
+    resolveWait = res;
+  });
+  if (!hang) resolveWait({ StatusCode: statusCode });
+
+  const container = {
+    started: false,
+    stopCalls: [],
+    removeCalls: [],
+    start: async () => {
+      container.started = true;
+    },
+    wait: async () => waitPromise,
+    logs: async () => Buffer.from(logs, "utf8"),
+    stop: async (opts) => {
+      container.stopCalls.push(opts);
+      resolveWait({ StatusCode: 137 }); // killed
+    },
+    remove: async (opts) => {
+      container.removeCalls.push(opts);
+    },
+  };
+  const created = [];
+  const docker = {
+    createContainer: async (cfg) => {
+      created.push(cfg);
+      return container;
+    },
+  };
+  return { docker, container, created };
+}
+
+test("runInSandbox runs a command to completion and returns exit code + output", async () => {
+  const { docker, container, created } = mockRunDocker({ statusCode: 0, logs: "build ok\n" });
+  const res = await runInSandbox("/proj", "npm run build", { docker, checkDocker: noopCheck });
+
+  assert.equal(res.exitCode, 0);
+  assert.equal(res.output, "build ok\n");
+  assert.equal(res.timedOut, false);
+  assert.deepEqual(created[0].Cmd, ["sh", "-c", "npm run build"], "command passed via sh -c");
+  assert.equal(created[0].Tty, true, "Tty on → clean combined output");
+  assert.deepEqual(created[0].HostConfig.Binds, [`${resolve("/proj")}:/app:rw`], "project bind-mounted");
+  assert.equal(container.removeCalls.length, 1, "container always removed");
+});
+
+test("runInSandbox surfaces a non-zero exit as a RESULT, not a throw", async () => {
+  const { docker, container } = mockRunDocker({ statusCode: 2, logs: "error TS1005\n" });
+  const res = await runInSandbox("/proj", "tsc", { docker, checkDocker: noopCheck });
+  assert.equal(res.exitCode, 2);
+  assert.match(res.output, /error TS1005/);
+  assert.equal(container.removeCalls.length, 1);
+});
+
+test("runInSandbox kills and flags a command that exceeds the timeout, then cleans up", async () => {
+  const { docker, container } = mockRunDocker({ hang: true });
+  const res = await runInSandbox("/proj", "sleep 999", {
+    docker,
+    checkDocker: noopCheck,
+    timeoutMs: 20,
+  });
+  assert.equal(res.timedOut, true);
+  assert.equal(res.exitCode, 137, "reaped the killed status");
+  assert.ok(container.stopCalls.length >= 1, "the container was stopped");
+  assert.equal(container.removeCalls.length, 1, "…and removed — nothing leaks");
+});
+
+test("runInSandbox caps output at maxOutputBytes", async () => {
+  const { docker } = mockRunDocker({ statusCode: 0, logs: "0123456789" });
+  const res = await runInSandbox("/proj", "cat big", {
+    docker,
+    checkDocker: noopCheck,
+    maxOutputBytes: 4,
+  });
+  assert.equal(res.output, "0123");
+  assert.equal(res.truncated, true);
+});
+
+test("runInSandbox omits NetworkMode by default and sets it when hardened to 'none'", async () => {
+  const def = mockRunDocker();
+  await runInSandbox("/proj", "npm install", { docker: def.docker, checkDocker: noopCheck });
+  assert.equal(def.created[0].HostConfig.NetworkMode, undefined, "default: Docker networking (npm needs it)");
+
+  const iso = mockRunDocker();
+  await runInSandbox("/proj", "node evil.js", { docker: iso.docker, checkDocker: noopCheck, network: "none" });
+  assert.equal(iso.created[0].HostConfig.NetworkMode, "none", "hardened: no network at all");
+});
+
+test("runInSandbox throws DockerNotAvailableError when Docker is absent", async () => {
+  await assert.rejects(
+    () =>
+      runInSandbox("/proj", "echo hi", {
+        checkDocker: () => {
+          throw new Error("'docker' is not recognized");
+        },
+      }),
+    DockerNotAvailableError,
+  );
+});

@@ -29,4 +29,7 @@ export * from "./deployer.js";
 export * from "./bot.js";
 export * from "./path-resolver.js";
 export * from "./memory.js";
+export * from "./tools/index.js";
+export * from "./agent.js";
+export * from "./planner.js";
 export * from "./setup.js";
