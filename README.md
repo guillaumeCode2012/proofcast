@@ -31,7 +31,7 @@ you:        "Build a checkout page"
 
 ProofCast:  Build → Run → Record → Prove → Deploy
             ────────────────────────────────────
-            🧠 generates the feature
+            🧠 generates the code
             📦 boots it in an isolated container
             🌐 drives it in real Chromium
             🎥 records the interaction as MP4
