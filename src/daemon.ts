@@ -44,7 +44,7 @@ export interface IssueToPrResult {
 export interface IssueToPrConfig {
   /** The project to fix (brownfield). */
   dirPath: string;
-  /** The planner driving the fix (LLM in API_KEY mode). */
+  /** The planner driving the fix. */
   planner: AgentPlanner;
   /** Tools available to the fix run. */
   registry: ToolRegistry;

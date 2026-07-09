@@ -49,13 +49,11 @@ test("README APPRENTISSAGE: project-scoped memory, never delete", () => {
   requires("never delete between sessions", /Never delete this file between sessions/i);
 });
 
-test("README AI CONFIG: documents the dual-mode contract (both branches)", () => {
-  requires("dual-mode config section", /AI configuration/i);
-  requires("aiMode key", /aiMode/);
-  requires("API branch", /API_KEY/);
-  requires("Subscription branch", /AGENT_SUBSCRIPTION/);
+test("README AI CONFIG: documents the autonomous, single-mode contract", () => {
+  requires("AI configuration section", /AI configuration/i);
+  requires("apiKey key", /apiKey/);
   requires("written to the config file", /\.proofcast-config\.json/);
-  requires("asks the user which mode", /clé API Anthropic.*abonnement/is);
+  requires("agent asks for the provider API key", /ask the user for their API key/i);
 });
 
 test("README AI CONFIG: documents EXACTLY the implemented commands (run + generate)", () => {
@@ -66,13 +64,11 @@ test("README AI CONFIG: documents EXACTLY the implemented commands (run + genera
   assert.doesNotMatch(README, /proofcast resume/i, "no phantom 'resume' command");
 });
 
-test("README AI CONFIG: subscription = no AI call (agent owns repair); API = self-heal up to 3", () => {
-  requires("subscription makes no LLM call", /no LLM call/i);
-  requires("the agent owns the fix loop", /all code repair is your responsibility/i);
+test("README AI CONFIG: ProofCast self-heals up to 3 attempts, no other agent involved", () => {
   requires("run reports the proof path", /proofPath/);
-  requires("run failure tells the agent to fix the files", /fix the affected files/i);
-  requires("API mode self-repairs up to 3 attempts", /up to 3 attempts/i);
+  requires("self-repairs up to 3 attempts", /up to 3 attempts/i);
   requires("exit code + JSON contract", /exit code/i);
+  requires("no hand-off to another agent", /never hand.+another agent/i);
 });
 
 test("README: no trace of the abandoned file-handoff / exchange-file mechanism", () => {

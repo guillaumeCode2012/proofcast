@@ -1,20 +1,16 @@
 #!/usr/bin/env node
 /**
- * ProofCast CLI — two commands, routed by the install's `aiMode`.
+ * ProofCast CLI — two commands.
  *
  *   proofcast run [dirPath]
- *     Pure executor, available in BOTH modes. Proves the code already sitting in
- *     `dirPath` (via {@link proveCode}) and prints a machine-readable JSON report
- *     on stdout. It NEVER generates or fixes code. In `AGENT_SUBSCRIPTION` mode
- *     this is the whole contract: the calling agent writes/fixes the code with its
- *     own subscription, runs `proofcast run`, reads the JSON + exit code, and owns
- *     the "fix → re-run" loop.
+ *     Pure executor. Proves the code already sitting in `dirPath` (via
+ *     {@link proveCode}) and prints a machine-readable JSON report on stdout. It
+ *     NEVER generates or fixes code.
  *
  *   proofcast generate "<description>" [dirPath]
- *     Autonomous pipeline, `API_KEY` mode ONLY. Delegates to {@link executeAndHeal}
- *     (generate → prove → self-repair, up to 3 attempts). In `AGENT_SUBSCRIPTION`
- *     mode it refuses immediately (clear stderr message, exit 1) — no LLM call, no
- *     fallback.
+ *     Autonomous pipeline. Delegates to {@link executeAndHeal} (generate → prove →
+ *     self-repair, up to 3 attempts) — ProofCast calls its own AI provider directly,
+ *     no external agent involved.
  *
  * Output contract (so agents can script on it reliably):
  *   - stdout carries EXACTLY ONE line of JSON (a {@link CliOutput}), always valid —
@@ -90,7 +86,7 @@ function withDefaults(overrides: Partial<CliDependencies> = {}): CliDependencies
 /**
  * `proofcast run [dirPath]` — prove existing code, print JSON, return an exit code.
  * Loads the config purely as a coherence check (it must be a validly configured
- * install); it does NOT branch on `aiMode` — `run` proves the same way in both modes.
+ * install).
  */
 export async function proofcastRun(
   args: string[],
@@ -125,8 +121,7 @@ export async function proofcastRun(
 }
 
 /**
- * `proofcast generate "<description>" [dirPath]` — autonomous generate+heal, but
- * ONLY in `API_KEY` mode. In `AGENT_SUBSCRIPTION` mode it refuses (exit 1, stderr).
+ * `proofcast generate "<description>" [dirPath]` — autonomous generate+heal.
  */
 export async function proofcastGenerate(
   args: string[],
@@ -147,17 +142,9 @@ export async function proofcastGenerate(
     return usageFailure(deps, `Configuration invalide : ${messageOf(err)}`);
   }
 
-  // Hard refusal in subscription mode — no attempt, no fallback, no LLM call.
-  if (config.aiMode === "AGENT_SUBSCRIPTION") {
-    return usageFailure(
-      deps,
-      "Erreur : 'generate' nécessite aiMode='API_KEY'. En mode abonnement, écris le code toi-même puis utilise 'proofcast run'.",
-    );
-  }
-
-  // API_KEY mode: make the configured key reach the provider layer, so an agent
-  // that only wrote `apiKey` into .proofcast-config.json (as the README says) can
-  // run `generate` without also exporting ANTHROPIC_API_KEY.
+  // Make the configured key reach the provider layer, so an agent that only wrote
+  // `apiKey` into .proofcast-config.json (as the README says) can run `generate`
+  // without also exporting ANTHROPIC_API_KEY.
   applyApiKeyFromConfig(config, deps.env);
 
   const start = deps.now();
@@ -251,18 +238,21 @@ function messageOf(err: unknown): string {
 }
 
 /**
- * Expose an `API_KEY`-mode config key to the provider layer, which resolves the
- * Anthropic key from the environment. This is a FALLBACK only: an explicit
- * `ANTHROPIC_API_KEY` already in the environment always wins, and a config with no
- * `apiKey` (i.e. `AGENT_SUBSCRIPTION`) is left untouched. ProofCast still reads the
- * MODEL from `ANTHROPIC_MODEL` — it never pre-selects one.
+ * Expose the config's API key to the provider layer by routing it to the right
+ * env var — Anthropic keys are shaped `sk-ant-...`, everything else is assumed to
+ * be an OpenAI-compatible key. This is a FALLBACK only: an explicit
+ * `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` already in the environment always wins.
+ * ProofCast still reads the MODEL from `ANTHROPIC_MODEL` / `OPENAI_MODEL` — it
+ * never pre-selects one.
  */
 export function applyApiKeyFromConfig(
   config: ProofCastConfig,
   env: NodeJS.ProcessEnv = process.env,
 ): void {
-  if (config.apiKey && !env.ANTHROPIC_API_KEY?.trim()) {
-    env.ANTHROPIC_API_KEY = config.apiKey;
+  if (!config.apiKey) return;
+  const envVar = config.apiKey.startsWith("sk-ant-") ? "ANTHROPIC_API_KEY" : "OPENAI_API_KEY";
+  if (!env[envVar]?.trim()) {
+    env[envVar] = config.apiKey;
   }
 }
 

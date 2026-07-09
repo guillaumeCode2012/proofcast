@@ -117,15 +117,15 @@ agent:  ✅ https://acme.vercel.app
 
 ## Everything inside
 
-> **Brownfield, self-repair, sandbox, and dual-mode.** ProofCast works in **Brownfield mode** (it analyzes the target directory before writing any code), has a **self-repair loop of at most 3 attempts**, and runs everything inside an **isolated local Docker container, automatically cleaned up at the end of the run.** It now connects **two ways** — an Anthropic **API key** (fully autonomous) or **your existing agent subscription** (Claude Code, Zed…), where ProofCast is a pure proof engine driven through a small **CLI** (`proofcast run` / `proofcast generate`).
+> **Brownfield, self-repair, sandbox, and autonomous.** ProofCast works in **Brownfield mode** (it analyzes the target directory before writing any code), has a **self-repair loop of at most 3 attempts**, and runs everything inside an **isolated local Docker container, automatically cleaned up at the end of the run.** ProofCast is the executor itself — it owns its own AI provider connection, generates the code, tests it, and self-heals, driven through a small **CLI** (`proofcast run` / `proofcast generate`).
 
 ProofCast isn't a demo recorder with extra steps. Recording is one organ; here's the whole body.
 
 - **Autonomous onboarding.** It sets its own bot up end to end — hands you a BotFather link, validates and persists the token, wires the provider — asking you for exactly one thing.
 - **Auto setup.** `npm run setup` installs dependencies, builds, installs Chromium, and prints a readiness report telling the driving agent precisely what's left.
 - **AI orchestration.** It resolves your provider, folds memory into the prompt, generates the feature, and keeps the call bounded with a timeout and a retry — a slow or flaky model can't hang the loop.
-- **Dual-mode: API key *or* your agent subscription.** Connect an Anthropic API key and ProofCast runs the whole loop itself (`generate` → prove → self-heal). Or keep your existing coding-agent subscription (Claude Code, Zed…): the agent writes the code, ProofCast is the pure proof engine — **zero LLM calls on its side**, chosen once via `aiMode` in `.proofcast-config.json`.
-- **A scriptable CLI for agents.** `proofcast run <dir>` proves code that already exists; `proofcast generate "<desc>" <dir>` runs the autonomous pipeline (API-key mode). Both print **one line of JSON on stdout** (`success`, `proofPath`, typed `errors`, `attempts`) and set a **process exit code**, so a driving agent can loop "fix → re-run" on a clean, machine-readable contract.
+- **Autonomous executor, not a wrapper.** Connect an API key and ProofCast runs the whole loop itself — generate, prove, self-heal — by calling its own AI provider directly. It never hands the job off to another agent.
+- **A scriptable CLI for agents.** `proofcast run <dir>` proves code that already exists; `proofcast generate "<desc>" <dir>` runs the autonomous pipeline. Both print **one line of JSON on stdout** (`success`, `proofPath`, typed `errors`, `attempts`) and set a **process exit code**, so a driving agent can loop "fix → re-run" on a clean, machine-readable contract.
 - **A pure prover primitive.** The `proveCode` core boots a project, drives it in a real browser, and returns a typed `ProofReport` — with **no AI dependency at all** and the sandbox **always torn down**, so proving is the same whether ProofCast or your agent wrote the code.
 - **A general-purpose tool belt.** Beyond building features, the agent has jailed, bounded tools: **files** (read/write/list, path-traversal-proof), **shell** (runs only inside the Docker sandbox — never the host), **browser** (navigate / fill / extract / screenshot via Playwright) and **HTTP** (read-only fetch). Every tool returns a structured result and **never throws** at the loop.
 - **A bounded agent loop.** `runAgent` drives a planner → tool → observe cycle: the LLM picks one tool at a time (multi-provider, structured decisions), the loop feeds each result back, and it is hard-capped by a step budget **and** a wall-clock timeout — never `while (true)`. Every irreversible action passes a **fail-closed guard**, which is exactly where the proof-before-deploy gate plugs in.
@@ -173,10 +173,10 @@ path-resolver              └─  memory      live reasoning + cross-session le
 | Module | Responsibility |
 |---|---|
 | `bot` | Telegraf control surface; `Démo` / `Déploie`; enforces the deploy gate |
-| `config` | Dual-mode config (`aiMode`: `API_KEY` / `AGENT_SUBSCRIPTION`); strict, no silent default |
+| `config` | Config (`apiKey` required); strict, no silent default |
 | `ai` | Multi-provider orchestration (Anthropic / OpenAI / custom); memory injection; HTML extraction; brownfield change sets |
 | `context-analyzer` | Brownfield analysis of an existing project (file tree + source, budget-aware truncation) for the model |
-| `orchestrator` | `API_KEY` self-heal loop: generate → **prove** → fix, bounded retries + global timeout |
+| `orchestrator` | Self-heal loop: generate → **prove** → fix, bounded retries + global timeout |
 | `prover` | Pure "boot + drive + report" primitive (no AI): sandbox, Playwright, typed `ProofReport`, always torn down |
 | `tools` | Jailed, bounded agent tools: `fs_*`, `shell_run` (sandbox-only), `browser_*`, `http_fetch` + SSRF url-guard; `save_skill`/`remember_preference`; `git_commit`/`github_open_pr`; `pilot_agent` |
 | `agent` / `planner` | Bounded planner→tool→observe loop (`runAgent`) with a fail-closed guard; multi-provider LLM planner |
@@ -184,7 +184,7 @@ path-resolver              └─  memory      live reasoning + cross-session le
 | `gate` | Reusable proof-before-deploy guard (`createProofGate`) for irreversible tools |
 | `github` | `git`/`gh` ops + the proof-gated PR (`openProvenPullRequest`) |
 | `webhook` / `daemon` | HMAC-verified Sentry/GitHub webhook → `runIssueToPr` (fix → prove → gated PR) + scheduler |
-| `cli` | `proofcast run` / `proofcast generate`, routed by `aiMode`; JSON on stdout + exit code |
+| `cli` | `proofcast run` / `proofcast generate`; JSON on stdout + exit code |
 | `sandbox` | Isolated Docker container (`node:20-alpine`) per run, published port, always torn down |
 | `video` | Local server + Playwright recording → MP4; feature-adaptive demo |
 | `deployer` | `vercel --yes --prod`, URL extraction, argument injection guard |
@@ -229,33 +229,18 @@ await startBot();                            // reads the token, resets live con
 
 ---
 
-## AI configuration — the dual-mode contract (CRITICAL)
+## AI configuration (CRITICAL)
 
-Before ProofCast can prove anything, the driving agent picks **one of two modes** and writes it to `.proofcast-config.json`. ProofCast never asks the human directly — *you*, the agent, ask and persist the choice.
+ProofCast is an autonomous agent, not an intermediary or a wrapper around another agent. Before it can prove anything, the driving agent asks the user for their AI provider API key and persists it to `.proofcast-config.json`. ProofCast never asks the human directly — *you*, the agent, ask and persist it.
 
-**Ask the user:** *"Veux-tu connecter ProofCast via une clé API Anthropic, ou via ton abonnement actuel (Claude Code, Zed, etc.) ?"*
+1. Ask the user for their API key (Anthropic, OpenAI, or a compatible endpoint).
+2. Write `"apiKey": "..."` into `.proofcast-config.json`.
+3. Use **`proofcast generate "<description>" <dirPath>`**: ProofCast generates, tests and self-repairs on its own (**up to 3 attempts**), calling its own AI provider directly — no intervention from you. Read the final JSON on stdout — it carries `success`, `attempts`, and `proofPath` — for the result.
+4. `proofcast run <dirPath>` remains available to (re-)prove code that already exists, without generating anything — it prints the same JSON contract on stdout.
 
-### If the user chooses "Subscription" — `aiMode: "AGENT_SUBSCRIPTION"`
+ProofCast reads the API key straight from `.proofcast-config.json` (an explicit `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` in the environment still wins). It reads the **model** from `ANTHROPIC_MODEL` / `OPENAI_MODEL` in your environment — ProofCast never pre-selects one.
 
-In this mode ProofCast makes **no LLM call whatsoever** — it only *proves* code that **you** write.
-
-1. Write `"aiMode": "AGENT_SUBSCRIPTION"` into `.proofcast-config.json`. Do **not** write an `apiKey` field.
-2. `@anthropic-ai/sdk` may stay in `package.json` — it is simply never called in this mode. No dependency change is required.
-3. Every time you generate or modify code for the user: write the files directly into the project, then run **`proofcast run <dirPath>`**.
-4. Read the JSON printed on **stdout** and the **exit code**:
-   - **`exitCode === 0`** — success. The proof video is ready (its path is in the `proofPath` field of the JSON). You may offer a Vercel deploy.
-   - **`exitCode !== 0`** — read the `errors` field of the JSON, fix the affected files **yourself** with your own subscription, then re-run `proofcast run <dirPath>`. Repeat until it passes, or until you judge it best to stop and tell the user.
-5. ProofCast will never make an AI call in this mode — **all code repair is your responsibility as the agent.** The "fix → re-run" loop lives entirely on your side, exactly like any other shell command that fails.
-
-### If the user chooses "API" — `aiMode: "API_KEY"`
-
-1. Ask the user for the Anthropic API key.
-2. Write `"aiMode": "API_KEY"` and `"apiKey": "..."` into `.proofcast-config.json`.
-3. Use **`proofcast generate "<description>" <dirPath>`**: ProofCast generates, tests and self-repairs on its own (**up to 3 attempts**), with no intervention from you. Read the final JSON on stdout — it carries `success`, `attempts`, and `proofPath` — for the result.
-
-ProofCast reads the API key straight from `.proofcast-config.json` (an explicit `ANTHROPIC_API_KEY` in the environment still wins). It reads the **model** from `ANTHROPIC_MODEL` in your environment — ProofCast never pre-selects one.
-
-Both commands print **exactly one line of JSON on stdout** (never a raw stack trace) and set the process **exit code** to `0` on success / non-zero on failure, so you can script on them reliably. `generate` is refused with a clear error in `AGENT_SUBSCRIPTION` mode — in subscription mode, write the code yourself and use `proofcast run`.
+Both commands print **exactly one line of JSON on stdout** (never a raw stack trace) and set the process **exit code** to `0` on success / non-zero on failure, so you can script on them reliably.
 
 ---
 
@@ -343,10 +328,10 @@ The full autonomous pipeline (real model → real Telegram → real deploy) runs
 | Module | Exports |
 |---|---|
 | `onboarding` | `generateBotFatherLink`, `saveToken`, `loadToken`, `maskToken` |
-| `config` | `loadConfig` — dual-mode `aiMode` (`API_KEY` / `AGENT_SUBSCRIPTION`) |
+| `config` | `loadConfig` — required `apiKey` |
 | `ai` | `generateFeature`, `extractHtmlDocument`, `parseBrownfieldResponse`, `createAnthropicProvider`, `createOpenAiProvider`, `resolveProvider` |
 | `context-analyzer` | `analyzeTargetDirectory` |
-| `orchestrator` | `executeAndHeal`, `writeFileChanges` (`API_KEY` self-heal loop) |
+| `orchestrator` | `executeAndHeal`, `writeFileChanges` (self-heal loop) |
 | `prover` | `proveCode`, `runBrowserChecks`, `spawnServerProcess`, `classifyBrowserErrors` |
 | `tools` | `ToolRegistry`, `createFsTools`, `createShellTool`, `createBrowserTools`, `createHttpTool`, `assertSafeHttpUrl`, `createSkillTools`, `createPreferenceTool`, `createGitHubTools`, `createPilotTool` |
 | `agent` / `planner` | `runAgent`, `createLlmPlanner`, `parsePlannerDecision` |

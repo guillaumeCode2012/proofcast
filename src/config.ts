@@ -1,22 +1,15 @@
 /**
- * ProofCast dual-mode configuration.
+ * ProofCast configuration.
  *
- * ProofCast runs in one of two mutually exclusive modes, chosen ONCE at install
- * time by the user's agent (Claude Code, Codex, …) and written to
- * `.proofcast-config.json`. ProofCast itself never asks the human — it only reads
- * what the agent persisted:
+ * ProofCast is an autonomous executor, not an intermediary: it always generates,
+ * tests and self-heals code itself by calling the AI SDK directly (see src/ai.ts),
+ * using the key persisted in `.proofcast-config.json` by the user's agent (Claude
+ * Code, Codex, …) at install time. ProofCast itself never asks the human — it only
+ * reads what the agent persisted.
  *
- *   - `API_KEY`            — ProofCast is fully autonomous: it generates, tests and
- *                           self-heals code by calling the AI SDK with `apiKey`.
- *   - `AGENT_SUBSCRIPTION` — ProofCast makes NO LLM call at all. The agent writes
- *                           the code with its own subscription; ProofCast only
- *                           proves it (see src/prover.ts, src/cli.ts).
- *
- * {@link loadConfig} is deliberately strict: a missing file, invalid JSON, an
- * unknown/absent `aiMode`, or an `API_KEY` mode with no key all fail LOUDLY with
- * an actionable message. There is never a silent fallback to a default mode —
- * picking the wrong mode would either leak an unintended AI call or wrongly refuse
- * one, so the caller must fix the config rather than guess.
+ * {@link loadConfig} is deliberately strict: a missing file, invalid JSON, or a
+ * missing/empty `apiKey` all fail LOUDLY with an actionable message. There is
+ * never a silent fallback — the caller must fix the config rather than guess.
  */
 
 import { readFile } from "node:fs/promises";
@@ -26,23 +19,15 @@ import { join, resolve } from "node:path";
 // Imported (not re-exported) so index.ts's `export *` keeps exactly one binding.
 import { CONFIG_FILENAME } from "./onboarding.js";
 
-/** The two AI backends ProofCast can be wired to. Never inferred — always explicit. */
-export type AiMode = "API_KEY" | "AGENT_SUBSCRIPTION";
-
-/** All valid {@link AiMode} values, for validation and error messages. */
-export const AI_MODES: readonly AiMode[] = ["API_KEY", "AGENT_SUBSCRIPTION"];
-
 /**
- * Full shape persisted to `.proofcast-config.json`. `aiMode` is required; `apiKey`
- * is required only in `API_KEY` mode (enforced by {@link loadConfig}). The
- * remaining fields are written by onboarding (src/onboarding.ts) and preserved
- * here so the config file has a single, complete type.
+ * Full shape persisted to `.proofcast-config.json`. `apiKey` is required — ProofCast
+ * always calls its AI provider itself. The remaining fields are written by
+ * onboarding (src/onboarding.ts) and preserved here so the config file has a
+ * single, complete type.
  */
 export interface ProofCastConfig {
-  /** Which AI backend ProofCast uses. Must be present and one of {@link AI_MODES}. */
-  aiMode: AiMode;
-  /** Anthropic (or compatible) API key — present ONLY when `aiMode === "API_KEY"`. */
-  apiKey?: string;
+  /** Provider API key ProofCast calls the AI SDK with. Always required. */
+  apiKey: string;
   /** Existing onboarding field: the Telegram bot token. */
   telegramToken?: string;
   /** Existing onboarding field: ISO timestamp of when the config was created. */
@@ -50,9 +35,9 @@ export interface ProofCastConfig {
 }
 
 /**
- * Thrown when `.proofcast-config.json` is missing, malformed, or internally
- * inconsistent (bad/absent `aiMode`, or `API_KEY` mode with no key). The message
- * always says what to fix — this error is meant to be shown to the agent verbatim.
+ * Thrown when `.proofcast-config.json` is missing, malformed, or has a
+ * missing/empty `apiKey`. The message always says what to fix — this error is
+ * meant to be shown to the agent verbatim.
  */
 export class InvalidConfigError extends Error {
   constructor(message: string) {
@@ -75,11 +60,10 @@ export interface LoadConfigOptions {
 }
 
 /**
- * Load and validate the dual-mode config from `.proofcast-config.json`.
+ * Load and validate the config from `.proofcast-config.json`.
  *
- * @throws {InvalidConfigError} if the file is absent, not valid JSON, has an
- *   absent/unknown `aiMode`, or is in `API_KEY` mode with a missing/empty key.
- *   Never returns a partially-valid or defaulted config.
+ * @throws {InvalidConfigError} if the file is absent, not valid JSON, or has a
+ *   missing/empty `apiKey`. Never returns a partially-valid or defaulted config.
  */
 export async function loadConfig(options: LoadConfigOptions = {}): Promise<ProofCastConfig> {
   const root = resolve(options.projectRoot ?? process.cwd());
@@ -90,7 +74,7 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Proof
   if (raw === null) {
     throw new InvalidConfigError(
       `Config introuvable : ${CONFIG_FILENAME} n'existe pas dans ${root}. ` +
-        `Crée-le avec un champ aiMode ('API_KEY' ou 'AGENT_SUBSCRIPTION').`,
+        `Crée-le avec un champ apiKey (la clé API de ton provider IA).`,
     );
   }
 
@@ -111,28 +95,16 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Proof
   }
 
   const config = parsed as Record<string, unknown>;
-  const aiMode = config.aiMode;
-  if (aiMode !== "API_KEY" && aiMode !== "AGENT_SUBSCRIPTION") {
+  const apiKey = config.apiKey;
+  if (typeof apiKey !== "string" || apiKey.trim().length === 0) {
     throw new InvalidConfigError(
-      `Config invalide : aiMode doit être 'API_KEY' ou 'AGENT_SUBSCRIPTION', ` +
-        `trouvé: ${describe(aiMode)}. Vérifie ${CONFIG_FILENAME}.`,
+      `Config invalide : ${CONFIG_FILENAME} exige un champ apiKey non vide, ` +
+        `trouvé: ${describe(apiKey)}. Ajoute ta clé API dans ${CONFIG_FILENAME}.`,
     );
   }
 
-  if (aiMode === "API_KEY") {
-    const apiKey = config.apiKey;
-    if (typeof apiKey !== "string" || apiKey.trim().length === 0) {
-      throw new InvalidConfigError(
-        `Config invalide : aiMode='API_KEY' exige un champ apiKey non vide, ` +
-          `trouvé: ${describe(apiKey)}. Ajoute ta clé API dans ${CONFIG_FILENAME} ` +
-          `(ou passe en aiMode='AGENT_SUBSCRIPTION').`,
-      );
-    }
-  }
-
   // Rebuild a clean, typed object rather than trusting the raw parse verbatim.
-  const result: ProofCastConfig = { aiMode };
-  if (typeof config.apiKey === "string") result.apiKey = config.apiKey;
+  const result: ProofCastConfig = { apiKey };
   if (typeof config.telegramToken === "string") result.telegramToken = config.telegramToken;
   if (typeof config.createdAt === "string") result.createdAt = config.createdAt;
   return result;

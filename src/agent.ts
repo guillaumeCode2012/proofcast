@@ -2,7 +2,7 @@
  * ProofCast agent loop — the bounded planner → tool → observe cycle.
  *
  * {@link runAgent} is the level-3 primitive on top of the tool layer (src/tools/):
- * a PLANNER (an LLM in `API_KEY` mode — built in step 15.2 — or any injected
+ * a PLANNER (an LLM-backed planner — built in step 15.2 — or any injected
  * strategy) looks at the goal, the tool catalogue, and everything observed so far,
  * and decides ONE next action: call a tool, or finish with a summary. The loop
  * executes tool calls through {@link ToolRegistry.invoke} — which never rejects —
@@ -18,10 +18,6 @@
  *     this is the extension point the proof-before-deploy gate plugs into for
  *     irreversible tools (deploy, PR): the veto is fed back to the planner as a
  *     failed result, so the model can react instead of crashing.
- *
- * In `AGENT_SUBSCRIPTION` mode ProofCast never plans (no LLM call): the calling
- * agent IS the loop and drives the tools itself. `runAgent` is the `API_KEY`-mode
- * counterpart.
  */
 
 import { logLiveContext } from "./memory.js";

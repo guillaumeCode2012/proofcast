@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 
-import { loadConfig, InvalidConfigError, AI_MODES } from "../dist/config.js";
+import { loadConfig, InvalidConfigError } from "../dist/config.js";
 import { CONFIG_FILENAME } from "../dist/onboarding.js";
 
 /**
@@ -21,23 +21,17 @@ function readerFor(contents, { onRead } = {}) {
 const ROOT = join(tmpdir(), "proofcast-config-test");
 const CONFIG_PATH = join(resolve(ROOT), CONFIG_FILENAME);
 
-test("AI_MODES exposes exactly the two supported modes", () => {
-  assert.deepEqual([...AI_MODES], ["API_KEY", "AGENT_SUBSCRIPTION"]);
-});
-
-test("valid API_KEY config loads correctly", async () => {
+test("valid config loads correctly", async () => {
   const readConfigFile = readerFor({
-    [CONFIG_PATH]: JSON.stringify({ aiMode: "API_KEY", apiKey: "sk-abc123" }),
+    [CONFIG_PATH]: JSON.stringify({ apiKey: "sk-abc123" }),
   });
   const config = await loadConfig({ projectRoot: ROOT, readConfigFile });
-  assert.equal(config.aiMode, "API_KEY");
   assert.equal(config.apiKey, "sk-abc123");
 });
 
-test("valid API_KEY config preserves existing onboarding fields", async () => {
+test("valid config preserves existing onboarding fields", async () => {
   const readConfigFile = readerFor({
     [CONFIG_PATH]: JSON.stringify({
-      aiMode: "API_KEY",
       apiKey: "sk-abc123",
       telegramToken: "123:secret",
       createdAt: "2026-01-01T00:00:00.000Z",
@@ -48,25 +42,24 @@ test("valid API_KEY config preserves existing onboarding fields", async () => {
   assert.equal(config.createdAt, "2026-01-01T00:00:00.000Z");
 });
 
-test("API_KEY config with no apiKey throws a clear error AT LOAD TIME", async () => {
+test("config with no apiKey throws a clear error AT LOAD TIME", async () => {
   const readConfigFile = readerFor({
-    [CONFIG_PATH]: JSON.stringify({ aiMode: "API_KEY" }),
+    [CONFIG_PATH]: JSON.stringify({}),
   });
   await assert.rejects(
     () => loadConfig({ projectRoot: ROOT, readConfigFile }),
     (err) => {
       assert.ok(err instanceof InvalidConfigError, "is InvalidConfigError");
       assert.match(err.message, /apiKey/);
-      assert.match(err.message, /API_KEY/);
       return true;
     },
   );
 });
 
-test("API_KEY config with an empty / whitespace apiKey is rejected", async () => {
+test("config with an empty / whitespace apiKey is rejected", async () => {
   for (const apiKey of ["", "   ", "\t\n"]) {
     const readConfigFile = readerFor({
-      [CONFIG_PATH]: JSON.stringify({ aiMode: "API_KEY", apiKey }),
+      [CONFIG_PATH]: JSON.stringify({ apiKey }),
     });
     await assert.rejects(
       () => loadConfig({ projectRoot: ROOT, readConfigFile }),
@@ -74,15 +67,6 @@ test("API_KEY config with an empty / whitespace apiKey is rejected", async () =>
       `apiKey=${JSON.stringify(apiKey)} should be rejected`,
     );
   }
-});
-
-test("valid AGENT_SUBSCRIPTION config loads WITHOUT an apiKey", async () => {
-  const readConfigFile = readerFor({
-    [CONFIG_PATH]: JSON.stringify({ aiMode: "AGENT_SUBSCRIPTION" }),
-  });
-  const config = await loadConfig({ projectRoot: ROOT, readConfigFile });
-  assert.equal(config.aiMode, "AGENT_SUBSCRIPTION");
-  assert.equal(config.apiKey, undefined, "no apiKey required in subscription mode");
 });
 
 test("missing config file throws a clear error, never a raw crash", async () => {
@@ -93,36 +77,6 @@ test("missing config file throws a clear error, never a raw crash", async () => 
     (err) => {
       assert.ok(err instanceof InvalidConfigError, "is InvalidConfigError");
       assert.match(err.message, new RegExp(CONFIG_FILENAME.replace(".", "\\.")));
-      return true;
-    },
-  );
-});
-
-test("unknown aiMode value (e.g. 'FOO') throws a clear error mentioning both modes", async () => {
-  const readConfigFile = readerFor({
-    [CONFIG_PATH]: JSON.stringify({ aiMode: "FOO" }),
-  });
-  await assert.rejects(
-    () => loadConfig({ projectRoot: ROOT, readConfigFile }),
-    (err) => {
-      assert.ok(err instanceof InvalidConfigError, "is InvalidConfigError");
-      assert.match(err.message, /API_KEY/);
-      assert.match(err.message, /AGENT_SUBSCRIPTION/);
-      assert.match(err.message, /FOO/, "echoes the offending value");
-      return true;
-    },
-  );
-});
-
-test("absent aiMode throws a clear error (no silent default)", async () => {
-  const readConfigFile = readerFor({
-    [CONFIG_PATH]: JSON.stringify({ apiKey: "sk-abc123" }),
-  });
-  await assert.rejects(
-    () => loadConfig({ projectRoot: ROOT, readConfigFile }),
-    (err) => {
-      assert.ok(err instanceof InvalidConfigError);
-      assert.match(err.message, /undefined/);
       return true;
     },
   );
@@ -156,7 +110,7 @@ test("a non-object JSON (array / string / number) is rejected", async () => {
 test("loadConfig reads exactly the .proofcast-config.json under projectRoot", async () => {
   let seenPath;
   const readConfigFile = readerFor(
-    { [CONFIG_PATH]: JSON.stringify({ aiMode: "AGENT_SUBSCRIPTION" }) },
+    { [CONFIG_PATH]: JSON.stringify({ apiKey: "sk-abc123" }) },
     { onRead: (p) => (seenPath = p) },
   );
   await loadConfig({ projectRoot: ROOT, readConfigFile });

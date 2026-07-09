@@ -1,10 +1,10 @@
 /**
  * Pilot tool — delegate a task to ANOTHER coding agent (Claude Code, Codex).
  *
- * `pilot_agent` generalizes the `AGENT_SUBSCRIPTION` idea: ProofCast can drive a
- * task into the user's own agent CLI (which carries their subscription) and capture
- * the result, so the ProofCast loop can orchestrate sub-agents — e.g. "have Codex
- * fix this file, then I'll prove it". The agent name is checked against an
+ * `pilot_agent` lets ProofCast drive a task into another agent CLI (which carries
+ * its own subscription) and capture the result, so the ProofCast loop can
+ * orchestrate sub-agents — e.g. "have Codex fix this file, then I'll prove it".
+ * The agent name is checked against an
  * allow-list (default `claude`, `codex`) so the tool can only invoke known CLIs.
  *
  * The runner is injected (tests never spawn anything). The default runs the agent

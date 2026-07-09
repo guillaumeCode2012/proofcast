@@ -1,9 +1,8 @@
 /**
  * ProofCast prover — the pure "test a project, report the result" primitive.
  *
- * {@link proveCode} takes a directory that ALREADY contains code (written either
- * by ProofCast's own AI loop in `API_KEY` mode, or by the calling agent in
- * `AGENT_SUBSCRIPTION` mode), boots it in an isolated Docker sandbox
+ * {@link proveCode} takes a directory that ALREADY contains code (written by
+ * ProofCast's own AI loop), boots it in an isolated Docker sandbox
  * (src/sandbox.ts) — or locally as a fallback — drives it with Playwright while
  * watching for runtime problems, and returns a structured {@link ProofReport}.
  *
@@ -12,8 +11,7 @@
  *     transitively (only src/sandbox.ts + src/video.ts + node builtins). A run of
  *     the prover can therefore make no LLM/network call by construction.
  *   - It is SINGLE-SHOT: one boot, one test, one report. There is no internal
- *     retry — the caller (executeAndHeal in `API_KEY` mode, or an external agent
- *     in `AGENT_SUBSCRIPTION` mode) owns the "fix → re-run" loop.
+ *     retry — the caller ({@link executeAndHeal}) owns the "fix → re-run" loop.
  *   - The sandbox/server is ALWAYS torn down in a `finally`, on success, on a
  *     typed failure, and on an unexpected mid-run throw — no container ever leaks.
  */

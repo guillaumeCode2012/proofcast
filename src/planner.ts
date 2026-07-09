@@ -1,5 +1,5 @@
 /**
- * ProofCast LLM planner — the `API_KEY`-mode strategy for {@link runAgent}.
+ * ProofCast LLM planner — the default strategy for {@link runAgent}.
  *
  * {@link createLlmPlanner} turns whichever provider the user connected (Anthropic,
  * OpenAI, or any compatible endpoint — via src/ai.ts, so it stays multi-provider
@@ -14,9 +14,6 @@
  * defensive (isolate the outermost object, tolerate a fence) and throws a clear
  * {@link InvalidPlannerResponseError} on anything malformed; runAgent catches that
  * and fails the run cleanly rather than looping on garbage.
- *
- * In `AGENT_SUBSCRIPTION` mode this planner is NOT used (ProofCast makes no LLM
- * call): the calling agent is the planner and drives the tools itself.
  */
 
 import { generateFeature as defaultGenerateFeature, type GenerateFeatureOptions } from "./ai.js";
