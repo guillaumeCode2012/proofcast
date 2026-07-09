@@ -61,6 +61,25 @@ test("system prompt lists every tool + the decision contract", () => {
   assert.match(sys, /"action":"finish"/);
 });
 
+test("system prompt folds in user preferences when provided", () => {
+  const withPrefs = buildSystemPrompt(TOOLS, "- Always deliver MP4\n- Prefer ESM");
+  assert.match(withPrefs, /Known user preferences/);
+  assert.match(withPrefs, /Always deliver MP4/);
+  // No preference section when the block is empty/whitespace.
+  assert.doesNotMatch(buildSystemPrompt(TOOLS, "   "), /Known user preferences/);
+});
+
+test("createLlmPlanner forwards preferences into the system prompt", async () => {
+  const calls = [];
+  const generate = async (_user, options) => {
+    calls.push(options);
+    return '{"action":"finish","summary":"ok"}';
+  };
+  const planner = createLlmPlanner({ generate, preferences: "- Never add Claude as co-author" });
+  await planner.decide("goal", TOOLS, []);
+  assert.match(calls[0].system, /Never add Claude as co-author/);
+});
+
 test("user message carries the goal and a capped history", () => {
   const empty = buildUserMessage("do X", [], 6000);
   assert.match(empty, /Goal: do X/);

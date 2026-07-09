@@ -5,3 +5,6 @@ export * from "./shell.js";
 export * from "./browser.js";
 export * from "./http.js";
 export * from "./url-guard.js";
+export * from "./skills.js";
+export * from "./github.js";
+export * from "./pilot.js";

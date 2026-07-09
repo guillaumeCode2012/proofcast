@@ -48,6 +48,12 @@ export interface LlmPlannerOptions {
   maxTokens?: number;
   /** Cap on echoed history (default {@link DEFAULT_MAX_HISTORY_CHARS}). */
   maxHistoryChars?: number;
+  /**
+   * Durable user preferences to fold into the system prompt (e.g. from
+   * `readPreferenceBlock`, src/memory.ts), so the agent honors them without being
+   * told each run. Omitted / empty → no preference section.
+   */
+  preferences?: string;
 }
 
 /** Build an {@link AgentPlanner} backed by a real LLM. */
@@ -61,7 +67,7 @@ export function createLlmPlanner(options: LlmPlannerOptions = {}): AgentPlanner 
         provider: options.provider,
         model: options.model,
         maxTokens: options.maxTokens,
-        system: buildSystemPrompt(tools),
+        system: buildSystemPrompt(tools, options.preferences),
         // The loop manages its own history; don't also inject project memory here.
         memory: false,
       });
@@ -71,10 +77,14 @@ export function createLlmPlanner(options: LlmPlannerOptions = {}): AgentPlanner 
 }
 
 /** System prompt: the tool catalogue + the exact JSON decision contract. */
-export function buildSystemPrompt(tools: ToolSpec[]): string {
+export function buildSystemPrompt(tools: ToolSpec[], preferences?: string): string {
   const catalogue = tools
     .map((t) => `- ${t.name}: ${t.description}\n  input schema: ${JSON.stringify(t.inputSchema)}`)
     .join("\n");
+  const prefsBlock =
+    preferences && preferences.trim().length > 0
+      ? `\n\n## Known user preferences (respect these)\n${preferences.trim()}`
+      : "";
   return (
     "You are ProofCast's autonomous agent. Work towards the user's goal by calling tools " +
     "ONE AT A TIME, observing each result, and continuing until the goal is done.\n\n" +
@@ -86,7 +96,8 @@ export function buildSystemPrompt(tools: ToolSpec[]): string {
     '  {"action":"finish","summary":"<what you accomplished>"}\n\n' +
     "Rules: use only the tools listed above; put the tool's arguments in \"input\" per its " +
     "schema; call \"finish\" as soon as the goal is achieved or cannot proceed. A tool result " +
-    'of {"ok":false} means it failed — read the error and adapt; do not repeat the same failing call.'
+    'of {"ok":false} means it failed — read the error and adapt; do not repeat the same failing call.' +
+    prefsBlock
   );
 }
 

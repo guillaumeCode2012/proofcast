@@ -130,6 +130,10 @@ ProofCast isn't a demo recorder with extra steps. Recording is one organ; here's
 - **A general-purpose tool belt.** Beyond building features, the agent has jailed, bounded tools: **files** (read/write/list, path-traversal-proof), **shell** (runs only inside the Docker sandbox — never the host), **browser** (navigate / fill / extract / screenshot via Playwright) and **HTTP** (read-only fetch). Every tool returns a structured result and **never throws** at the loop.
 - **A bounded agent loop.** `runAgent` drives a planner → tool → observe cycle: the LLM picks one tool at a time (multi-provider, structured decisions), the loop feeds each result back, and it is hard-capped by a step budget **and** a wall-clock timeout — never `while (true)`. Every irreversible action passes a **fail-closed guard**, which is exactly where the proof-before-deploy gate plugs in.
 - **SSRF-guarded networking.** The browser and HTTP tools refuse private, loopback and cloud-metadata hosts (`169.254.169.254`, `localhost`, `10/8`, …) by default, so a model-driven fetch can't be steered into your internal services.
+- **Self-written skills + preference memory.** The agent persists reusable procedures it works out (`save_skill` → `list`/`load`/`run`) and durable user preferences (`remember_preference`), both user-scoped, redacted and injected back into its own planning — so it gets better across runs instead of re-deriving the same thing.
+- **Proof-gated pull requests.** ProofCast can branch, commit and open a GitHub PR — but `openProvenPullRequest` **refuses without a passing proof** and stamps the proof into the PR body. A reusable proof gate vetoes irreversible tools in the loop, so *"no proof, no PR"* holds even for the autonomous agent.
+- **Sub-agent piloting.** `pilot_agent` delegates a task to another coding-agent CLI (Claude Code, Codex — allow-listed) and captures its output, so ProofCast can orchestrate other agents and then prove their work.
+- **Fix-it-while-you-sleep daemon.** An HMAC-verified webhook endpoint (Sentry / GitHub) turns an incoming error or issue into: open a branch → agent fixes it → **prove it** → commit → open the gated PR. A forged webhook is rejected before anything runs; a failed proof means no PR — the worst case is *no PR*, never an unproven merge.
 - **Brownfield mode.** Point it at an existing project and it analyzes the codebase first — a file tree plus source, intelligently truncated to fit the model's budget — then *modifies* what's already there instead of regenerating from scratch.
 - **Self-repair loop.** It runs the feature, watches for console errors, uncaught page exceptions, and HTTP 5xx, and feeds any failure back to the model to fix its own code — bounded to **3 attempts**, with a global timeout, never an infinite loop.
 - **Docker isolation.** Every run executes inside a throwaway `node:20-alpine` container, so generated code can install and build without touching your machine — and the container is **always torn down** when the run ends, even on a crash.
@@ -174,8 +178,12 @@ path-resolver              └─  memory      live reasoning + cross-session le
 | `context-analyzer` | Brownfield analysis of an existing project (file tree + source, budget-aware truncation) for the model |
 | `orchestrator` | `API_KEY` self-heal loop: generate → **prove** → fix, bounded retries + global timeout |
 | `prover` | Pure "boot + drive + report" primitive (no AI): sandbox, Playwright, typed `ProofReport`, always torn down |
-| `tools` | Jailed, bounded agent tools: `fs_*`, `shell_run` (sandbox-only), `browser_*`, `http_fetch` + SSRF url-guard |
+| `tools` | Jailed, bounded agent tools: `fs_*`, `shell_run` (sandbox-only), `browser_*`, `http_fetch` + SSRF url-guard; `save_skill`/`remember_preference`; `git_commit`/`github_open_pr`; `pilot_agent` |
 | `agent` / `planner` | Bounded planner→tool→observe loop (`runAgent`) with a fail-closed guard; multi-provider LLM planner |
+| `skills` | Self-written reusable skills (`SkillStore`, `runSkill`) + user preference memory |
+| `gate` | Reusable proof-before-deploy guard (`createProofGate`) for irreversible tools |
+| `github` | `git`/`gh` ops + the proof-gated PR (`openProvenPullRequest`) |
+| `webhook` / `daemon` | HMAC-verified Sentry/GitHub webhook → `runIssueToPr` (fix → prove → gated PR) + scheduler |
 | `cli` | `proofcast run` / `proofcast generate`, routed by `aiMode`; JSON on stdout + exit code |
 | `sandbox` | Isolated Docker container (`node:20-alpine`) per run, published port, always torn down |
 | `video` | Local server + Playwright recording → MP4; feature-adaptive demo |
@@ -340,8 +348,11 @@ The full autonomous pipeline (real model → real Telegram → real deploy) runs
 | `context-analyzer` | `analyzeTargetDirectory` |
 | `orchestrator` | `executeAndHeal`, `writeFileChanges` (`API_KEY` self-heal loop) |
 | `prover` | `proveCode`, `runBrowserChecks`, `spawnServerProcess`, `classifyBrowserErrors` |
-| `tools` | `ToolRegistry`, `createFsTools`, `createShellTool`, `createBrowserTools`, `createHttpTool`, `assertSafeHttpUrl` |
+| `tools` | `ToolRegistry`, `createFsTools`, `createShellTool`, `createBrowserTools`, `createHttpTool`, `assertSafeHttpUrl`, `createSkillTools`, `createPreferenceTool`, `createGitHubTools`, `createPilotTool` |
 | `agent` / `planner` | `runAgent`, `createLlmPlanner`, `parsePlannerDecision` |
+| `skills` | `SkillStore`, `runSkill`; `writePreference`, `readPreferenceBlock` |
+| `gate` / `github` | `createProofGate`; `commitAll`, `openPullRequest`, `openProvenPullRequest` |
+| `webhook` / `daemon` | `startWebhookServer`, `verifyWebhookSignature`; `runIssueToPr`, `createScheduler` |
 | `cli` | `proofcast run` / `proofcast generate` (binaries) |
 | `sandbox` | `startSandbox`, `stopSandbox` |
 | `video` | `recordDemo`, `smartDemo`, `runDemoActions`, `autoFillDemoForm`, `hasDemoBeenGenerated` |

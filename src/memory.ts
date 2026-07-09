@@ -158,3 +158,78 @@ export function writeMemory(entry: string, options: MemoryOptions = {}): void {
   const kept = lines.slice(-Math.max(1, maxLines));
   writeFileSync(file, `${kept.join("\n")}\n`, "utf8");
 }
+
+// ── User preferences (~/.proofcast/preferences.md) ─────────────────────────
+
+/**
+ * Durable USER preferences, distinct from project memory: they are NOT scoped to
+ * a project (they follow the user across all of them) and carry no timestamp —
+ * a preference is a standing instruction, not a time-series event. Redacted and
+ * de-duplicated on write, and injected into the planner's system prompt so the
+ * agent respects "how I like things done" without being told each time.
+ */
+export const PREFERENCES_FILENAME = "preferences.md";
+
+export interface PreferenceOptions {
+  /** Home directory holding `.proofcast/` (defaults to `os.homedir()`). */
+  homeDir?: string;
+  /** Max preference entries retained (defaults to {@link DEFAULT_MAX_MEMORY_LINES}). */
+  maxLines?: number;
+}
+
+function preferenceFilePath(options: PreferenceOptions): string {
+  return join(options.homeDir ?? homedir(), ".proofcast", PREFERENCES_FILENAME);
+}
+
+/**
+ * Persist a redacted user preference: capped per entry, de-duplicated (an
+ * identical existing preference is not appended twice), and truncated to
+ * `maxLines`. A blank entry is a no-op.
+ */
+export function writePreference(entry: string, options: PreferenceOptions = {}): void {
+  let safe = redactSecrets(String(entry)).trim().replace(/\r?\n/g, " ");
+  if (safe.length === 0) {
+    return;
+  }
+  if (safe.length > MAX_MEMORY_ENTRY_CHARS) {
+    safe = `${safe.slice(0, MAX_MEMORY_ENTRY_CHARS)}… [truncated]`;
+  }
+  const line = `- ${safe}`;
+
+  const file = preferenceFilePath(options);
+  mkdirSync(dirname(file), { recursive: true });
+  const existing = existsSync(file) ? readFileSync(file, "utf8") : "";
+  const lines = existing
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l.startsWith("- ") && l !== line); // drop blanks + an identical dupe
+  lines.push(line);
+
+  const maxLines = options.maxLines ?? DEFAULT_MAX_MEMORY_LINES;
+  writeFileSync(file, `${lines.slice(-Math.max(1, maxLines)).join("\n")}\n`, "utf8");
+}
+
+/** Full preferences file content (empty string if none). */
+export function readPreferences(options: PreferenceOptions = {}): string {
+  const file = preferenceFilePath(options);
+  return existsSync(file) ? readFileSync(file, "utf8") : "";
+}
+
+/**
+ * The preference block for prompt injection: the most-recent whole preference
+ * lines that fit within `maxChars` (older ones drop first). Empty when there are none.
+ */
+export function readPreferenceBlock(maxChars: number, options: PreferenceOptions = {}): string {
+  const content = readPreferences(options).trim();
+  if (content.length === 0 || content.length <= maxChars) {
+    return content;
+  }
+  const kept: string[] = [];
+  let budget = maxChars;
+  for (const line of content.split(/\r?\n/).reverse()) {
+    if (line.length + 1 > budget && kept.length > 0) break;
+    kept.unshift(line);
+    budget -= line.length + 1;
+  }
+  return kept.join("\n");
+}
