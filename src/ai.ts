@@ -21,6 +21,9 @@ import type OpenAI from "openai";
 
 import { analyzeTargetDirectory } from "./context-analyzer.js";
 import { readRecentMemory } from "./memory.js";
+// Type-only: the DemoAction union lives with the recorder; importing the type
+// here couples nothing at runtime (it is erased at compile time).
+import type { DemoAction } from "./video.js";
 
 /**
  * Non-streaming max output tokens. This is a cap, not a target: the model stops
@@ -380,6 +383,187 @@ export function parseBrownfieldResponse(text: string): FileChange[] {
     }
     return { path, action, content };
   });
+}
+
+// ── Demo plan (what the recording should prove, and how) ─────────────────────
+
+/**
+ * A recording plan for a generated feature. `expectation` is the model's own
+ * one-sentence statement of what the feature should DO — shown to the user with
+ * the proof — and `actions` are the concrete steps that exercise it in the
+ * browser, so the video demonstrates the behaviour instead of just scrolling.
+ */
+export interface DemoPlan {
+  /** One sentence: what a viewer should see the feature do. */
+  expectation: string;
+  /** Ordered interactions that exercise the feature (may be empty). */
+  actions: DemoAction[];
+}
+
+/** Max chars of feature HTML fed to the demo-plan prompt (bounds input tokens). */
+export const MAX_DEMO_PLAN_HTML_CHARS = 12_000;
+
+/**
+ * System prompt for demo-plan generation: given a feature's HTML, decide what a
+ * user would DO to prove it works. The output contract is a strict JSON object
+ * so {@link parseDemoPlan} can validate it; scrolling is explicitly reserved for
+ * static content so the default demo stops being "scroll the page".
+ */
+export const DEMO_PLAN_SYSTEM_PROMPT =
+  "You are ProofCast's demo director. A feature has just been built as a single HTML page and is " +
+  "about to be recorded in a REAL browser as visual proof that it works. Decide what a user would DO " +
+  "to exercise the feature, so the recording proves the actual behaviour — not a page that just scrolls.\n\n" +
+  "Reply with ONLY a JSON object (no prose, no markdown fences):\n" +
+  '{"expectation":"<one sentence: what the video should show the feature doing>","actions":[ ... ]}\n\n' +
+  "Each action is one of:\n" +
+  '  {"type":"fill","selector":"<css>","value":"<text>"}   set an input value\n' +
+  '  {"type":"type","selector":"<css>","text":"<text>"}    type it char-by-char (visible in the video)\n' +
+  '  {"type":"click","selector":"<css>"}                    click a button/link\n' +
+  '  {"type":"hover","selector":"<css>"}                    hover an element\n' +
+  '  {"type":"press","key":"<key>"}                         press a key (e.g. "Enter")\n' +
+  '  {"type":"scroll","to":"bottom"}                        scroll — use ONLY for static content\n' +
+  '  {"type":"wait","ms":<number>}                          pause so a change becomes visible\n\n' +
+  "Rules: use selectors that actually exist in the HTML you are given; pick the shortest sequence that " +
+  "demonstrates the feature end to end (fill a form then submit, add an item then see it appear, toggle then " +
+  "see the result); add a short wait after any action that triggers a visible change; never invent selectors. " +
+  "Output only the JSON object.";
+
+/** Thrown when a demo-plan response is not a valid {@link DemoPlan} JSON object. */
+export class InvalidDemoPlanResponseError extends Error {
+  constructor(reason: string) {
+    super(`The model did not return a valid demo plan: ${reason}.`);
+    this.name = "InvalidDemoPlanResponseError";
+  }
+}
+
+export interface GenerateDemoPlanOptions extends ProviderCallOptions {
+  /** Provider to use (instance | "anthropic" | "openai"); defaults to env/auto. */
+  provider?: ProviderSelector;
+  /** Injected text generator (tests). Defaults to {@link generateFeature}. */
+  generate?: (description: string, options: GenerateFeatureOptions) => Promise<string>;
+}
+
+/**
+ * Ask the model, for a feature it just built, what the feature should do and how
+ * to exercise it in the browser. Returns a validated {@link DemoPlan}. Individual
+ * malformed actions are dropped rather than failing the whole plan; a response
+ * that isn't a JSON object at all throws {@link InvalidDemoPlanResponseError} so
+ * the caller can fall back to the adaptive default demo.
+ *
+ * @throws {TypeError} for a blank request.
+ */
+export async function generateDemoPlan(
+  request: string,
+  html: string,
+  options: GenerateDemoPlanOptions = {},
+): Promise<DemoPlan> {
+  if (typeof request !== "string" || request.trim().length === 0) {
+    throw new TypeError("A non-empty feature request is required to plan a demo.");
+  }
+  const generate = options.generate ?? generateFeature;
+  const text = await generate(buildDemoPlanUserMessage(request, html), {
+    provider: options.provider,
+    model: options.model,
+    maxTokens: options.maxTokens ?? 1024,
+    system: options.system ?? DEMO_PLAN_SYSTEM_PROMPT,
+    // The plan is derived from this feature only; don't inject project memory.
+    memory: false,
+  });
+  return parseDemoPlan(text);
+}
+
+/** Assemble the user turn for a demo plan: the request, then the built HTML. */
+function buildDemoPlanUserMessage(request: string, html: string): string {
+  const source = typeof html === "string" ? html : "";
+  const clipped =
+    source.length > MAX_DEMO_PLAN_HTML_CHARS
+      ? `${source.slice(0, MAX_DEMO_PLAN_HTML_CHARS)}\n<!-- …truncated… -->`
+      : source;
+  return (
+    `Original request:\n${request}\n\n` +
+    `The feature was built as this single HTML document:\n\n${clipped}\n\n` +
+    "Produce the demo plan now."
+  );
+}
+
+/**
+ * Parse a demo-plan model response into a validated {@link DemoPlan}. Tolerates a
+ * ```json fence or surrounding prose by isolating the outermost JSON object, and
+ * drops any individual action that doesn't match the {@link DemoAction} contract.
+ * @throws {InvalidDemoPlanResponseError} when the response isn't a JSON object.
+ */
+export function parseDemoPlan(text: string): DemoPlan {
+  if (typeof text !== "string" || text.trim().length === 0) {
+    throw new InvalidDemoPlanResponseError("empty response");
+  }
+  let body = text.trim();
+  const fenced = body.match(/```(?:json)?\s*\n?([\s\S]*?)```/i);
+  if (fenced?.[1]) {
+    body = fenced[1].trim();
+  }
+  const start = body.indexOf("{");
+  const end = body.lastIndexOf("}");
+  if (start < 0 || end < start) {
+    throw new InvalidDemoPlanResponseError("no JSON object found");
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body.slice(start, end + 1));
+  } catch (err) {
+    throw new InvalidDemoPlanResponseError(`invalid JSON (${err instanceof Error ? err.message : String(err)})`);
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new InvalidDemoPlanResponseError("top-level value is not an object");
+  }
+
+  const record = parsed as Record<string, unknown>;
+  const expectation = typeof record.expectation === "string" ? record.expectation.trim() : "";
+  const rawActions = Array.isArray(record.actions) ? record.actions : [];
+  const actions = rawActions
+    .map(coerceDemoAction)
+    .filter((action): action is DemoAction => action !== null);
+  return { expectation, actions };
+}
+
+/** Coerce one untrusted value into a valid {@link DemoAction}, or `null` to drop it. */
+function coerceDemoAction(raw: unknown): DemoAction | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const r = raw as Record<string, unknown>;
+  const selector = typeof r.selector === "string" && r.selector.trim().length > 0 ? r.selector : undefined;
+
+  switch (r.type) {
+    case "wait": {
+      const ms = Number(r.ms);
+      return Number.isFinite(ms) && ms >= 0 ? { type: "wait", ms } : null;
+    }
+    case "scroll": {
+      const action: Extract<DemoAction, { type: "scroll" }> = { type: "scroll" };
+      if (r.to === "top" || r.to === "bottom") action.to = r.to;
+      if (Number.isFinite(Number(r.by))) action.by = Number(r.by);
+      if (Number.isFinite(Number(r.steps))) action.steps = Number(r.steps);
+      return action;
+    }
+    case "fill":
+      return selector ? { type: "fill", selector, value: typeof r.value === "string" ? r.value : "" } : null;
+    case "type": {
+      if (!selector || typeof r.text !== "string") return null;
+      const action: Extract<DemoAction, { type: "type" }> = { type: "type", selector, text: r.text };
+      if (Number.isFinite(Number(r.delayMs))) action.delayMs = Number(r.delayMs);
+      return action;
+    }
+    case "click":
+      return selector ? { type: "click", selector } : null;
+    case "hover":
+      return selector ? { type: "hover", selector } : null;
+    case "press":
+      return typeof r.key === "string" && r.key.length > 0 ? { type: "press", key: r.key } : null;
+    case "autofillForm":
+      // Demo credentials are supplied by the recorder (formData); ignore any here.
+      return { type: "autofillForm" };
+    default:
+      return null;
+  }
 }
 
 /**

@@ -18,7 +18,11 @@
 import { Markup, Telegraf } from "telegraf";
 import type { Context } from "telegraf";
 
-import { extractHtmlDocument, generateFeature as defaultGenerateFeature } from "./ai.js";
+import {
+  extractHtmlDocument,
+  generateDemoPlan as defaultGenerateDemoPlan,
+  generateFeature as defaultGenerateFeature,
+} from "./ai.js";
 import { deployWithVercel as defaultDeployWithVercel } from "./deployer.js";
 import {
   logLiveContext as defaultLogLiveContext,
@@ -34,11 +38,13 @@ import {
   stripQuotes,
 } from "./path-resolver.js";
 import { isDockerAvailable as defaultIsDockerAvailable } from "./sandbox.js";
-import { recordDemo as defaultRecordDemo } from "./video.js";
+import { recordDemo as defaultRecordDemo, type DemoAction } from "./video.js";
 
 /** Dependencies the handlers use — injectable so tests avoid real AI/video/deploy. */
 export interface BotDependencies {
   generateFeature: typeof defaultGenerateFeature;
+  /** Ask the model what the feature should do + how to exercise it on video. */
+  generateDemoPlan: typeof defaultGenerateDemoPlan;
   recordDemo: typeof defaultRecordDemo;
   deployWithVercel: typeof defaultDeployWithVercel;
   /** Brownfield self-heal on an existing project (used when a target folder is given). */
@@ -55,6 +61,7 @@ export interface BotDependencies {
 
 const DEFAULT_DEPS: BotDependencies = {
   generateFeature: defaultGenerateFeature,
+  generateDemoPlan: defaultGenerateDemoPlan,
   recordDemo: defaultRecordDemo,
   deployWithVercel: defaultDeployWithVercel,
   executeAndHeal: defaultExecuteAndHeal,
@@ -185,8 +192,14 @@ async function runGreenfieldDemo(
   const html = extractHtmlDocument(await deps.generateFeature(description));
   deps.logLiveContext("demo", "feature generated");
 
+  // Ask the model what this feature should DO and how to exercise it, so the
+  // recording proves the behaviour instead of just scrolling the page. This is
+  // best-effort: on any failure we fall back to the adaptive default demo
+  // (auth-form fill or scroll) rather than break the proof.
+  const { actions, expectation } = await planDemo(deps, description, html);
+
   await ctx.reply("🎥 Enregistrement de la preuve vidéo…");
-  const demo = await deps.recordDemo({ html });
+  const demo = await deps.recordDemo({ html, actions });
   deps.logLiveContext("demo", `proof recorded (${demo.sizeBytes} bytes)`);
 
   // Only mark demo-ready AFTER a successful recording.
@@ -194,7 +207,9 @@ async function runGreenfieldDemo(
   await ctx.replyWithVideo(
     { source: demo.video, filename: "proofcast-demo.mp4" },
     {
-      caption: "✅ Preuve vidéo prête. Vérifie-la, puis envoie « Déploie ».",
+      caption: expectation
+        ? `✅ Preuve : ${expectation}\nVérifie-la, puis envoie « Déploie ».`
+        : "✅ Preuve vidéo prête. Vérifie-la, puis envoie « Déploie ».",
       // Metadata so Telegram delivers immediately (no probing / re-encoding).
       width: demo.width,
       height: demo.height,
@@ -202,6 +217,33 @@ async function runGreenfieldDemo(
       supports_streaming: true,
     },
   );
+}
+
+/**
+ * Best-effort demo plan: the model states what the feature should do and the
+ * steps to exercise it. Returns `undefined` actions (→ adaptive default demo)
+ * and an empty expectation if planning fails or yields no usable steps — a bad
+ * plan must never break or block the recording.
+ */
+async function planDemo(
+  deps: BotDependencies,
+  description: string,
+  html: string,
+): Promise<{ actions?: DemoAction[]; expectation: string }> {
+  try {
+    const plan = await deps.generateDemoPlan(description, html);
+    deps.logLiveContext(
+      "demo",
+      `plan: ${plan.expectation || "(no expectation)"} — ${plan.actions.length} step(s)`,
+    );
+    return {
+      actions: plan.actions.length > 0 ? plan.actions : undefined,
+      expectation: plan.expectation,
+    };
+  } catch (err) {
+    deps.logLiveContext("demo", `plan generation failed, using default demo: ${errorMessage(err)}`);
+    return { actions: undefined, expectation: "" };
+  }
 }
 
 /**

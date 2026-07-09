@@ -6,7 +6,9 @@ import { tmpdir } from "node:os";
 
 import { writeMemory } from "../dist/memory.js";
 import {
+  DEMO_PLAN_SYSTEM_PROMPT,
   EmptyFeatureResponseError,
+  InvalidDemoPlanResponseError,
   MissingApiKeyError,
   MissingModelError,
   NoProviderConfiguredError,
@@ -14,7 +16,9 @@ import {
   createAnthropicProvider,
   createOpenAiProvider,
   extractHtmlDocument,
+  generateDemoPlan,
   generateFeature,
+  parseDemoPlan,
   resolveProvider,
 } from "../dist/ai.js";
 
@@ -198,6 +202,94 @@ test("extractHtmlDocument strips markdown fences and isolates the document", () 
   assert.equal(extractHtmlDocument(plain), plain);
 
   assert.equal(extractHtmlDocument("<div>just a fragment</div>"), "<div>just a fragment</div>");
+});
+
+// ── demo plan ────────────────────────────────────────────────────────────────
+
+test("parseDemoPlan reads the expectation and valid actions from a JSON object", () => {
+  const plan = parseDemoPlan(
+    JSON.stringify({
+      expectation: "the signup form creates an account",
+      actions: [
+        { type: "type", selector: "#email", text: "a@b.co", delayMs: 30 },
+        { type: "click", selector: "button[type=submit]" },
+        { type: "wait", ms: 500 },
+      ],
+    }),
+  );
+  assert.equal(plan.expectation, "the signup form creates an account");
+  assert.deepEqual(plan.actions, [
+    { type: "type", selector: "#email", text: "a@b.co", delayMs: 30 },
+    { type: "click", selector: "button[type=submit]" },
+    { type: "wait", ms: 500 },
+  ]);
+});
+
+test("parseDemoPlan tolerates a ```json fence and surrounding prose", () => {
+  const plan = parseDemoPlan(
+    'Sure:\n```json\n{"expectation":"x","actions":[{"type":"scroll","to":"bottom"}]}\n```',
+  );
+  assert.equal(plan.expectation, "x");
+  assert.deepEqual(plan.actions, [{ type: "scroll", to: "bottom" }]);
+});
+
+test("parseDemoPlan drops malformed actions instead of failing the whole plan", () => {
+  const plan = parseDemoPlan(
+    JSON.stringify({
+      expectation: "e",
+      actions: [
+        { type: "click" }, // missing selector → dropped
+        { type: "nope", selector: "#x" }, // unknown type → dropped
+        { type: "click", selector: "#ok" }, // kept
+        "not-an-object", // dropped
+      ],
+    }),
+  );
+  assert.deepEqual(plan.actions, [{ type: "click", selector: "#ok" }]);
+});
+
+test("parseDemoPlan defaults a missing expectation / actions to safe values", () => {
+  const plan = parseDemoPlan(JSON.stringify({ actions: [{ type: "press", key: "Enter" }] }));
+  assert.equal(plan.expectation, "");
+  assert.deepEqual(plan.actions, [{ type: "press", key: "Enter" }]);
+
+  const empty = parseDemoPlan(JSON.stringify({ expectation: "only text" }));
+  assert.deepEqual(empty.actions, []);
+});
+
+test("parseDemoPlan throws on non-object / unparseable responses", () => {
+  assert.throws(() => parseDemoPlan(""), InvalidDemoPlanResponseError);
+  assert.throws(() => parseDemoPlan("no json here"), InvalidDemoPlanResponseError);
+  assert.throws(() => parseDemoPlan("[1,2,3]"), InvalidDemoPlanResponseError);
+  assert.throws(() => parseDemoPlan("{ not json }"), InvalidDemoPlanResponseError);
+});
+
+test("generateDemoPlan calls the generator with the demo-plan prompt, the HTML, and no memory", async () => {
+  const calls = [];
+  const generate = async (description, options) => {
+    calls.push({ description, options });
+    return JSON.stringify({ expectation: "does the thing", actions: [{ type: "click", selector: "#go" }] });
+  };
+
+  const plan = await generateDemoPlan("a signup page", "<html><body><button id='go'>Go</button></body></html>", {
+    generate,
+    model: "m1",
+  });
+
+  assert.deepEqual(plan, { expectation: "does the thing", actions: [{ type: "click", selector: "#go" }] });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].options.system, DEMO_PLAN_SYSTEM_PROMPT, "uses the demo-plan system prompt");
+  assert.equal(calls[0].options.memory, false, "does not inject project memory into a plan");
+  assert.equal(calls[0].options.model, "m1", "forwards the model");
+  assert.match(calls[0].description, /a signup page/, "includes the original request");
+  assert.match(calls[0].description, /id='go'/, "includes the built HTML");
+});
+
+test("generateDemoPlan rejects a blank request before calling the model", async () => {
+  let called = false;
+  const generate = async () => ((called = true), "{}");
+  await assert.rejects(() => generateDemoPlan("  ", "<html></html>", { generate }), TypeError);
+  assert.equal(called, false);
 });
 
 function restoreEnv(name, value) {

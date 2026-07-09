@@ -42,15 +42,19 @@ function mockDeps({
   healResult,
   resolveResult,
   resolveThrows,
+  demoPlan,
+  demoPlanThrows = false,
 } = {}) {
   const calls = {
     generateFeature: 0,
+    generateDemoPlan: 0,
     recordDemo: 0,
     deployWithVercel: 0,
     isDockerAvailable: 0,
     resolveAnyDirectory: null,
     executeAndHeal: null,
     lastDescription: null,
+    lastDemoPlanArgs: null,
     logs: [],
     memoryWrites: [],
   };
@@ -60,6 +64,20 @@ function mockDeps({
       calls.generateFeature++;
       calls.lastDescription = description;
       return "<html><body>feature</body></html>";
+    },
+    async generateDemoPlan(request, html) {
+      calls.generateDemoPlan++;
+      calls.lastDemoPlanArgs = { request, html };
+      if (demoPlanThrows) throw new Error("plan generation blew up");
+      return (
+        demoPlan ?? {
+          expectation: "the signup form creates an account",
+          actions: [
+            { type: "type", selector: "#email", text: "a@b.co" },
+            { type: "click", selector: "button[type=submit]" },
+          ],
+        }
+      );
     },
     async recordDemo(recordOptions) {
       calls.recordDemo++;
@@ -128,6 +146,7 @@ test("'Démo' generates a feature, records the proof, sends the MP4, marks demo-
   await runDemoCommand(ctx, state, deps);
 
   assert.equal(deps.calls.generateFeature, 1);
+  assert.equal(deps.calls.generateDemoPlan, 1, "the model plans how to exercise the feature");
   assert.equal(deps.calls.recordDemo, 1);
   assert.equal(deps.calls.lastDescription, "une page de connexion");
   assert.equal(ctx.videos.length, 1, "should send exactly one video");
@@ -135,6 +154,54 @@ test("'Démo' generates a feature, records the proof, sends the MP4, marks demo-
   assert.ok(ctx.videos[0].video.filename.endsWith(".mp4"));
   assert.equal(state.demoReady, true);
   assert.ok(deps.calls.logs.length >= 3, "should log live context around heavy actions");
+});
+
+test("'Démo' feeds the model's demo plan into the recorder and states the expectation", async () => {
+  const state = createChatState();
+  const ctx = mockCtx("Démo une page d'inscription");
+  const deps = mockDeps({
+    demoPlan: {
+      expectation: "the form creates an account and shows a success message",
+      actions: [
+        { type: "type", selector: "#email", text: "demo@x.co" },
+        { type: "click", selector: "button[type=submit]" },
+      ],
+    },
+  });
+
+  await runDemoCommand(ctx, state, deps);
+
+  // The plan's actions drive the recording (not the generic scroll fallback).
+  assert.deepEqual(deps.calls.lastRecordOptions.actions, [
+    { type: "type", selector: "#email", text: "demo@x.co" },
+    { type: "click", selector: "button[type=submit]" },
+  ]);
+  // The model's stated expectation is shown to the user with the proof.
+  assert.match(ctx.videos[0].extra.caption, /the form creates an account/);
+});
+
+test("'Démo' falls back to the adaptive default demo when planning fails", async () => {
+  const state = createChatState();
+  const ctx = mockCtx("Démo a landing page");
+  const deps = mockDeps({ demoPlanThrows: true });
+
+  await runDemoCommand(ctx, state, deps);
+
+  // No actions → recordDemo runs its own adaptive default (smartDemo).
+  assert.equal(deps.calls.recordDemo, 1);
+  assert.equal(deps.calls.lastRecordOptions.actions, undefined, "no actions forced on a failed plan");
+  assert.equal(state.demoReady, true, "a failed plan must NOT block the proof");
+  assert.match(ctx.videos[0].extra.caption, /Preuve vidéo prête/, "generic caption when no expectation");
+});
+
+test("'Démo' passes no actions when the plan has an empty step list", async () => {
+  const state = createChatState();
+  const ctx = mockCtx("Démo something static");
+  const deps = mockDeps({ demoPlan: { expectation: "", actions: [] } });
+
+  await runDemoCommand(ctx, state, deps);
+
+  assert.equal(deps.calls.lastRecordOptions.actions, undefined, "empty plan → adaptive default demo");
 });
 
 test("'Démo' strips markdown fences from AI output before recording", async () => {
