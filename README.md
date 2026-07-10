@@ -18,7 +18,7 @@
 
 <br/>
 
-<img src="docs/proofcast-demo.gif" alt="Inside a phone: ProofCast builds a payment page, records a real video proof of the checkout working in a real browser, sends it in Telegram — then a Déploie command ships it live." width="300" />
+<img src="docs/proofcast-demo-payment.gif" alt="Inside a phone: ProofCast builds a payment page, records a real video proof of the checkout working in a real browser, sends it in Telegram — then a Déploie command ships it live." width="300" />
 
 <sub>Real recording, real Chromium, real pipeline. Not a mockup.</sub>
 
