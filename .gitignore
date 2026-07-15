@@ -4,6 +4,9 @@ node_modules/
 # Build output
 dist/
 
+# npm packaging artifact (created by `npm pack`)
+*.tgz
+
 # Secrets & local runtime config (created by saveToken())
 .proofcast-config.json
 .env

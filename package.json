@@ -1,16 +1,25 @@
 {
   "name": "proofcast",
   "version": "0.1.0",
-  "description": "Proof-before-deploy engine for AI agents: record a video demo of a feature, then deploy only after implicit user validation.",
+  "description": "Proof-before-deploy engine for AI agents: build a feature, prove it works in a real browser (Playwright → MP4 video), and only deploy once the proof exists.",
   "type": "module",
   "license": "MIT",
+  "author": "Guillaume Prévot",
+  "homepage": "https://github.com/guillaumeCode2012/proofcast#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/guillaumeCode2012/proofcast.git"
+  },
+  "bugs": {
+    "url": "https://github.com/guillaumeCode2012/proofcast/issues"
+  },
   "engines": {
     "node": ">=18.17"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "bin": {
-    "proofcast": "./dist/cli.js"
+    "proofcast": "dist/cli.js"
   },
   "exports": {
     ".": {
@@ -20,7 +29,8 @@
   },
   "files": [
     "dist",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
     "build": "tsc",
@@ -29,16 +39,20 @@
     "typecheck": "tsc --noEmit",
     "test": "tsc && node --test test/onboarding.test.mjs test/config.test.mjs test/ai.test.mjs test/context-analyzer.test.mjs test/orchestrator.test.mjs test/prover.test.mjs test/cli.test.mjs test/tools.test.mjs test/agent.test.mjs test/planner.test.mjs test/skills.test.mjs test/github.test.mjs test/daemon.test.mjs test/sandbox.test.mjs test/video.test.mjs test/deployer.test.mjs test/bot.test.mjs test/integration.test.mjs test/example.test.mjs test/path-resolver.test.mjs test/memory.test.mjs test/setup.test.mjs test/readme.test.mjs test/agents.test.mjs",
     "test:live": "tsc && node --test test/live.test.mjs",
-    "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\""
+    "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
+    "prepublishOnly": "npm run clean && npm run build"
   },
   "keywords": [
+    "ai-agents",
     "ai-agent",
+    "verification",
     "proof",
-    "demo",
-    "deploy",
-    "telegram",
+    "testing",
     "playwright",
-    "vercel"
+    "llm",
+    "ci",
+    "browser-testing",
+    "video-proof"
   ],
   "devDependencies": {
     "@types/dockerode": "^4.0.1",
