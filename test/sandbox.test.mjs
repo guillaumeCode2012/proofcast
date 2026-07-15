@@ -236,15 +236,24 @@ test("runInSandbox surfaces a non-zero exit as a RESULT, not a throw", async () 
 
 test("runInSandbox kills and flags a command that exceeds the timeout, then cleans up", async () => {
   const { docker, container } = mockRunDocker({ hang: true });
-  const res = await runInSandbox("/proj", "sleep 999", {
-    docker,
-    checkDocker: noopCheck,
-    timeoutMs: 20,
-  });
-  assert.equal(res.timedOut, true);
-  assert.equal(res.exitCode, 137, "reaped the killed status");
-  assert.ok(container.stopCalls.length >= 1, "the container was stopped");
-  assert.equal(container.removeCalls.length, 1, "…and removed — nothing leaks");
+  // runInSandbox's timeout timer is unref'd (so a fast command never keeps the
+  // process alive). Here the mock hangs with no active handle, so on Node 20 the
+  // event loop can drain before that 20 ms timer fires — cancelling the test. A
+  // ref'd keep-alive holds the loop open across the await; cleared right after.
+  const keepAlive = setInterval(() => {}, 1_000_000);
+  try {
+    const res = await runInSandbox("/proj", "sleep 999", {
+      docker,
+      checkDocker: noopCheck,
+      timeoutMs: 20,
+    });
+    assert.equal(res.timedOut, true);
+    assert.equal(res.exitCode, 137, "reaped the killed status");
+    assert.ok(container.stopCalls.length >= 1, "the container was stopped");
+    assert.equal(container.removeCalls.length, 1, "…and removed — nothing leaks");
+  } finally {
+    clearInterval(keepAlive);
+  }
 });
 
 test("runInSandbox caps output at maxOutputBytes", async () => {

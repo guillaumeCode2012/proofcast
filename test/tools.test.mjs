@@ -494,9 +494,17 @@ test("http_fetch aborts past the timeout and reports it", async () => {
       }),
     { timeoutMs: 20 },
   );
-  const res = await registry.invoke("http_fetch", { url: "https://slow.test/" }, ctx);
-  assert.equal(res.ok, false);
-  assert.match(res.error, /timed out after 20 ms/);
+  // http_fetch's timeout timer is unref'd; the mock fetch hangs with no active
+  // handle, so on Node 20 the loop can drain before that 20 ms timer fires and
+  // cancel the test. A ref'd keep-alive holds the loop open across the await.
+  const keepAlive = setInterval(() => {}, 1_000_000);
+  try {
+    const res = await registry.invoke("http_fetch", { url: "https://slow.test/" }, ctx);
+    assert.equal(res.ok, false);
+    assert.match(res.error, /timed out after 20 ms/);
+  } finally {
+    clearInterval(keepAlive);
+  }
 });
 
 // ── SSRF url-guard (15.3) ─────────────────────────────────────────────────────
