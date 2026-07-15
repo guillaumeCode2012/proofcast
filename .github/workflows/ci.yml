@@ -23,6 +23,13 @@ jobs:
       - name: Install Chromium (Playwright)
         run: npx playwright install --with-deps chromium
 
+      # ubuntu-latest ships a running Docker daemon, so the real-sandbox tests
+      # execute (they skip only when no daemon is present). They boot the project
+      # in a node:20-alpine container, so the image must be pulled first —
+      # otherwise startSandbox fails with "Image Docker introuvable".
+      - name: Pull sandbox image (node:20-alpine)
+        run: docker pull node:20-alpine
+
       - name: Build
         run: npm run build
 
