@@ -1,10 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import net from "node:net";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { chromium } from "playwright";
 
+import { proofcastDemo, DEMO_PROOF_FILENAME } from "../dist/cli.js";
 import { proveCode, spawnServerProcess, waitForPort } from "../dist/prover.js";
 import { autoFillDemoForm } from "../dist/video.js";
 
@@ -91,4 +94,31 @@ test("examples/signup: the real prover proves it and records a genuine MP4 (no n
   assert.ok(looksLikeMp4(report.video), "the proof must be a real MP4 (ftyp box present)");
   assert.ok(report.video.length > 0, "the proof video must be non-empty");
   assert.equal(typeof report.durationMs, "number");
+});
+
+test("proofcast demo: bundled example → real MP4 in an empty out dir, exit 0 (no Docker, no API key)", async () => {
+  // The whole point: from a folder with NO user files, `demo` resolves the example
+  // bundled in the package, proves it locally in a real browser, and writes a real
+  // MP4. This is the true end-to-end path a first-time `npx proofcast demo` runs.
+  const outDir = mkdtempSync(join(tmpdir(), "proofcast-demo-out-"));
+  const out = [];
+  try {
+    const code = await proofcastDemo([outDir], {
+      stdout: (line) => out.push(line),
+      stderr: () => {},
+      now: () => Date.now(),
+    });
+
+    assert.equal(code, 0, `demo should exit 0; stdout=${out.join("\n")}`);
+    assert.equal(out.length, 1, "exactly one JSON line on stdout");
+    const json = JSON.parse(out[0]);
+    assert.equal(json.success, true);
+    assert.ok(json.proofPath.endsWith(DEMO_PROOF_FILENAME), "reports the demo proof path");
+
+    const buf = readFileSync(json.proofPath);
+    assert.ok(looksLikeMp4(buf), "the demo wrote a real MP4 (ftyp box present)");
+    assert.ok(buf.length > 0, "the demo MP4 is non-empty");
+  } finally {
+    rmSync(outDir, { recursive: true, force: true });
+  }
 });

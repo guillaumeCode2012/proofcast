@@ -14,6 +14,11 @@
  *     self-repair, up to 3 attempts) — ProofCast calls its own AI provider directly,
  *     no external agent involved.
  *
+ *   proofcast demo [outDir]
+ *     Zero-setup trial. Proves a BUNDLED example project (shipped inside the
+ *     package) in a real browser and writes a real MP4 — from ANY empty folder, with
+ *     no user files, no API key, no Telegram, no Vercel, and no Docker.
+ *
  * Output contract (so agents can script on it reliably):
  *   - stdout carries EXACTLY ONE line of JSON (a {@link CliOutput}), always valid —
  *     never a raw stack trace, even on an unexpected failure.
@@ -21,9 +26,10 @@
  *   - the process exit code is 0 on success and non-zero on any failure.
  */
 
-import { writeFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { cp, mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, relative, resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { loadConfig as defaultLoadConfig, type ProofCastConfig } from "./config.js";
 import { proveCode as defaultProveCode, type ProofError, type ProofReport } from "./prover.js";
@@ -35,6 +41,9 @@ export const DEFAULT_MAX_RETRIES = 3;
 
 /** Filename of the proof video written into the target directory on success. */
 export const PROOF_FILENAME = "proofcast-proof.mp4";
+
+/** Filename of the proof video written by `proofcast demo`. */
+export const DEMO_PROOF_FILENAME = "proofcast-demo-proof.mp4";
 
 /**
  * The single JSON object printed on stdout by every command. A superset of the
@@ -55,6 +64,8 @@ export interface CliOutput {
 export interface CliDependencies {
   loadConfig: (options?: { projectRoot?: string }) => Promise<ProofCastConfig>;
   proveCode: (dirPath: string) => Promise<ProofReport>;
+  /** Prove the bundled demo project. Defaults to LOCAL execution — no Docker, so the demo is truly zero-setup. */
+  proveDemo: (dirPath: string) => Promise<ProofReport>;
   executeAndHeal: (description: string, dirPath: string, maxRetries: number) => Promise<HealResult>;
   writeProof: (proofPath: string, video: Buffer) => Promise<void>;
   /** Environment the provider layer resolves its API key from (default `process.env`). */
@@ -71,6 +82,10 @@ function withDefaults(overrides: Partial<CliDependencies> = {}): CliDependencies
     proveCode:
       overrides.proveCode ??
       ((dirPath) => defaultProveCode(dirPath, { execution: isDockerAvailable() ? "docker" : "local" })),
+    // Force LOCAL: the demo must run from any empty folder without Docker. The
+    // bundled example is our own trusted, zero-dependency code, so running it on
+    // the host is safe.
+    proveDemo: overrides.proveDemo ?? ((dirPath) => defaultProveCode(dirPath, { execution: "local" })),
     executeAndHeal:
       overrides.executeAndHeal ??
       ((description, dirPath, maxRetries) =>
@@ -178,6 +193,73 @@ export async function proofcastGenerate(
   return 1;
 }
 
+/**
+ * `proofcast demo [outDir]` — zero-setup trial.
+ *
+ * Proves the example bundled inside the package (see {@link bundledExampleDir}),
+ * so it depends on NO files in the user's folder. The example is copied into a
+ * throwaway temp directory (proving runs `npm install` and writes artifacts, which
+ * must never touch the installed package or the user's cwd), proven LOCALLY (no
+ * Docker) in a real browser, and the resulting MP4 is written into `outDir`
+ * (default: the current directory). The temp copy is always cleaned up.
+ */
+export async function proofcastDemo(
+  args: string[],
+  overrides: Partial<CliDependencies> = {},
+): Promise<number> {
+  const deps = withDefaults(overrides);
+  const outDir = resolve(args[0] ?? process.cwd());
+  const start = deps.now();
+
+  const exampleDir = bundledExampleDir();
+  if (!(await pathExists(exampleDir))) {
+    return usageFailure(
+      deps,
+      `Exemple bundlé introuvable (${exampleDir}). Réinstalle proofcast — le paquet doit embarquer examples/.`,
+    );
+  }
+
+  let workDir: string | undefined;
+  try {
+    workDir = await mkdtemp(join(tmpdir(), "proofcast-demo-"));
+    // Copy only the source: never drag along a node_modules / lockfile / a past
+    // proof that may sit in the example dir during local development. The filter
+    // tests each entry's path RELATIVE to the example root — crucial because the
+    // installed package lives UNDER node_modules/, so matching the absolute path
+    // would wrongly exclude the entire example (and copy nothing).
+    await cp(exampleDir, workDir, {
+      recursive: true,
+      filter: (src) => {
+        const rel = relative(exampleDir, src);
+        return !/(?:^|[\\/])node_modules(?:[\\/]|$)|\.mp4$|package-lock\.json$/.test(rel);
+      },
+    });
+
+    let report: ProofReport;
+    try {
+      report = await deps.proveDemo(workDir);
+    } catch (err) {
+      return usageFailure(deps, `Échec inattendu de la démo : ${messageOf(err)}`);
+    }
+
+    if (report.success && report.video && report.video.length > 0) {
+      await mkdir(outDir, { recursive: true });
+      const proofPath = join(outDir, DEMO_PROOF_FILENAME);
+      await deps.writeProof(proofPath, report.video);
+      emit(deps, { success: true, proofPath, durationMs: deps.now() - start });
+      return 0;
+    }
+    emit(deps, { success: false, errors: report.errors, durationMs: deps.now() - start });
+    return 1;
+  } finally {
+    if (workDir) {
+      await rm(workDir, { recursive: true, force: true }).catch(() => {
+        /* best-effort cleanup of the throwaway copy */
+      });
+    }
+  }
+}
+
 /** Route `argv` to a subcommand and return its exit code. */
 export async function runCli(argv: string[], overrides: Partial<CliDependencies> = {}): Promise<number> {
   const [subcommand, ...rest] = argv;
@@ -186,6 +268,8 @@ export async function runCli(argv: string[], overrides: Partial<CliDependencies>
       return proofcastRun(rest, overrides);
     case "generate":
       return proofcastGenerate(rest, overrides);
+    case "demo":
+      return proofcastDemo(rest, overrides);
     case undefined:
     case "help":
     case "--help":
@@ -194,7 +278,7 @@ export async function runCli(argv: string[], overrides: Partial<CliDependencies>
       return 0;
     default: {
       const deps = withDefaults(overrides);
-      deps.stderr(`Commande inconnue : ${subcommand}. Utilise 'run' ou 'generate'.`);
+      deps.stderr(`Commande inconnue : ${subcommand}. Utilise 'run', 'generate' ou 'demo'.`);
       emit(deps, { success: false, error: `Unknown command: ${subcommand}`, durationMs: 0 });
       return 1;
     }
@@ -239,8 +323,32 @@ function usageOutput(): CliOutput & { commands: string[] } {
   return {
     success: true,
     durationMs: 0,
-    commands: ["proofcast run [dirPath]", 'proofcast generate "<description>" [dirPath]'],
+    commands: [
+      "proofcast run [dirPath]",
+      'proofcast generate "<description>" [dirPath]',
+      "proofcast demo [outDir]",
+    ],
   };
+}
+
+/**
+ * Absolute path to the example bundled in the package. From the compiled binary
+ * (`dist/cli.js`) the example ships one level up at `examples/signup` (see the
+ * package.json "files" allowlist), so this resolves correctly both from a clone
+ * and from an installed package.
+ */
+function bundledExampleDir(): string {
+  return fileURLToPath(new URL("../examples/signup", import.meta.url));
+}
+
+/** True when a path exists (never throws). */
+async function pathExists(p: string): Promise<boolean> {
+  try {
+    await stat(p);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** Message of an unknown error value. */

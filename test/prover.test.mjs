@@ -149,6 +149,19 @@ test("proveCode validates its input", async () => {
   await assert.rejects(() => proveCode("   "), TypeError);
 });
 
+test("proveCode fails CLEARLY on a missing directory (no cryptic spawn ENOENT on Windows)", async () => {
+  // A real user hit `spawn C:\WINDOWS\system32\cmd.exe ENOENT` by pointing `run`
+  // at a folder that doesn't exist (npm is spawned through a shell on Windows, so
+  // a missing cwd surfaces as ENOENT on the shell). We must catch that up front.
+  const missing = join(tmpdir(), `proofcast-missing-${Date.now()}`);
+  const report = await proveCode(missing, { execution: "local" });
+
+  assert.equal(report.success, false);
+  assert.equal(report.errors[0].type, "INSTALL_FAILED");
+  assert.match(report.errors[0].message, /introuvable|n'existe pas|not found/i);
+  assert.doesNotMatch(report.errors[0].message ?? "", /ENOENT|cmd\.exe/i, "no cryptic spawn error leaks out");
+});
+
 // ── startSandboxServer (mock dockerode) ─────────────────────────────────────
 
 test("startSandboxServer classifies a build failure from container logs (mock dockerode)", async () => {

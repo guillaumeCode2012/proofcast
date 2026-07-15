@@ -17,7 +17,8 @@
  */
 
 import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { readFile, stat } from "node:fs/promises";
 import { createConnection } from "node:net";
 import { join } from "node:path";
 
@@ -145,6 +146,26 @@ export async function proveCode(dirPath: string, options: ProveCodeOptions = {})
   }
 
   const start = Date.now();
+
+  // Real boot needs the directory to actually exist. Fail with a CLEAR message
+  // rather than a cryptic `spawn … cmd.exe ENOENT` (npm on Windows spawns through
+  // a shell, and a missing cwd surfaces as ENOENT on the shell) or a Docker bind
+  // error. Skipped when a caller injects its own startServer — it owns the dir
+  // semantics (the prover's own unit tests boot a fake, non-existent dir).
+  if (!options.deps?.startServer && !(await directoryExists(dirPath))) {
+    return failReport(
+      [
+        {
+          type: "INSTALL_FAILED",
+          message:
+            `Le dossier à prouver est introuvable : ${dirPath}. ` +
+            "Vérifie le chemin — ou lance `proofcast demo` pour un essai clé en main, sans aucun fichier.",
+        },
+      ],
+      start,
+    );
+  }
+
   const port = options.port ?? DEFAULT_PROVE_PORT;
   const execution = options.execution ?? "docker";
   const startServer =
@@ -628,10 +649,25 @@ function needsWindowsShell(command: string): boolean {
  * always static literals, never model-supplied.
  */
 function spawnCommand(command: string, args: string[], options: SpawnOptions): ChildProcess {
+  // Guard the cwd: spawning with a non-existent working directory throws a
+  // confusing `ENOENT` against the executable (on Windows, against the shell) —
+  // turn it into a clear, actionable error before we ever spawn.
+  if (typeof options.cwd === "string" && !existsSync(options.cwd)) {
+    throw new Error(`Le dossier de travail n'existe pas : ${options.cwd}`);
+  }
   if (needsWindowsShell(command)) {
     return spawn([command, ...args].join(" "), [], { ...options, shell: true });
   }
   return spawn(command, args, options);
+}
+
+/** True when `dirPath` exists and is a directory (never throws). */
+async function directoryExists(dirPath: string): Promise<boolean> {
+  try {
+    return (await stat(dirPath)).isDirectory();
+  } catch {
+    return false;
+  }
 }
 
 /** Message of an unknown error value. */

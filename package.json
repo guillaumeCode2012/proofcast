@@ -1,6 +1,6 @@
 {
   "name": "proofcast",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Proof-before-deploy engine for AI agents: build a feature, prove it works in a real browser (Playwright → MP4 video), and only deploy once the proof exists.",
   "type": "module",
   "license": "MIT",
@@ -29,6 +29,7 @@
   },
   "files": [
     "dist",
+    "examples",
     "README.md",
     "LICENSE"
   ],
