@@ -1,0 +1,11 @@
+{
+  "name": "proofcast-example-signup",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Zero-dependency signup page — the target of ProofCast's 2-minute local trial.",
+  "type": "module",
+  "scripts": {
+    "build": "node -e \"process.stdout.write('no build step needed\\n')\"",
+    "start": "node server.js"
+  }
+}

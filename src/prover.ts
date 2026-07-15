@@ -16,7 +16,7 @@
  *     typed failure, and on an unexpected mid-run throw — no container ever leaks.
  */
 
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { createConnection } from "node:net";
 import { join } from "node:path";
@@ -394,7 +394,7 @@ export async function spawnServerProcess(
 ): Promise<ServerHandle> {
   const command = options.command ?? (process.platform === "win32" ? "npm.cmd" : "npm");
   const args = options.args ?? ["run", "start"];
-  const child = spawn(command, args, {
+  const child = spawnCommand(command, args, {
     cwd: dirPath,
     env: { ...process.env, PORT: String(port), ...options.env },
     stdio: "ignore",
@@ -575,7 +575,7 @@ function signalTree(child: ChildProcess, pid: number, signal: "SIGTERM" | "SIGKI
 /** Spawn a command and resolve on exit 0, rejecting on error / non-zero / timeout. */
 function runToCompletion(command: string, args: string[], cwd: string, timeoutMs: number): Promise<void> {
   return new Promise((resolvePromise, rejectPromise) => {
-    const child = spawn(command, args, { cwd, stdio: ["ignore", "ignore", "pipe"] });
+    const child = spawnCommand(command, args, { cwd, stdio: ["ignore", "ignore", "pipe"] });
 
     let stderr = "";
     child.stderr?.on("data", (chunk) => {
@@ -606,6 +606,32 @@ function runToCompletion(command: string, args: string[], cwd: string, timeoutMs
       }
     });
   });
+}
+
+/**
+ * On Windows, npm is a `.cmd` shim and Node (>=18.20 / 20.x) refuses to spawn a
+ * `.cmd`/`.bat` file without a shell (it throws `EINVAL`). Those must go through
+ * cmd.exe; plain executables (a real `node.exe`, a POSIX `npm`) are spawned
+ * directly so a path containing spaces is not re-parsed by the shell. The command
+ * and args at every call site are static literals — never model input — so
+ * enabling the shell here adds no command-injection surface.
+ */
+function needsWindowsShell(command: string): boolean {
+  return process.platform === "win32" && /\.(cmd|bat)$/i.test(command);
+}
+
+/**
+ * `spawn`, but transparently routing a Windows `.cmd`/`.bat` shim through the
+ * shell (see {@link needsWindowsShell}). When the shell is used we fold the args
+ * into the command line and pass none, so Node does not emit the DEP0190 warning
+ * about un-escaped args under `shell` — safe precisely because these args are
+ * always static literals, never model-supplied.
+ */
+function spawnCommand(command: string, args: string[], options: SpawnOptions): ChildProcess {
+  if (needsWindowsShell(command)) {
+    return spawn([command, ...args].join(" "), [], { ...options, shell: true });
+  }
+  return spawn(command, args, options);
 }
 
 /** Message of an unknown error value. */

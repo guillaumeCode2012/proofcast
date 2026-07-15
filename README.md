@@ -14,7 +14,7 @@
 
 [![Contribute](https://img.shields.io/badge/Contribute-FFDD00?style=for-the-badge&logo=buymeacoffee&logoColor=black)](https://www.buymeacoffee.com/guillaume_code) &nbsp; [![Follow on X](https://img.shields.io/badge/Follow_@GuillaumeP86859-black?style=for-the-badge&logo=x&logoColor=white)](https://x.com/GuillaumeP86859)
 
-[The problem](#the-problem) · [The solution](#the-solution) · [How it works](#how-it-works) · [Architecture](#architecture) · [Installation](#installation) · [Status](#current-status)
+[Quickstart](#quickstart-a-real-proof-in-2-minutes) · [The problem](#the-problem) · [The solution](#the-solution) · [How it works](#how-it-works) · [Architecture](#architecture) · [Installation](#installation) · [Status](#current-status)
 
 <br/>
 
@@ -37,6 +37,38 @@ ProofCast:  Build → Run → Record → Prove → Deploy
             🎥 records the interaction as MP4
             ✅ only then — deploys
 ```
+
+---
+
+## Quickstart: a real proof in 2 minutes
+
+Want to see ProofCast actually work before wiring up anything? Prove a bundled
+example — **no API key, no Telegram, no Vercel, and no Docker required:**
+
+```bash
+git clone https://github.com/guillaumeCode2012/proofcast.git
+cd proofcast
+npm install
+npm run demo          # == npx proofcast run ./examples/signup
+```
+
+ProofCast boots the bundled example ([examples/signup](examples/signup)), drives
+its signup form in a **real Chromium** — types an email and a password, submits,
+and watches the account get created — records the session, and transcodes it to
+an **MP4**. It prints one line of JSON and writes the video next to the example:
+
+```json
+{ "success": true, "proofPath": "examples/signup/proofcast-proof.mp4", "durationMs": 3535 }
+```
+
+Exit code `0` means the proof passed (non-zero otherwise, so you can script on
+it). Open `examples/signup/proofcast-proof.mp4` and watch it — that is the whole
+point: **evidence you can play, not a checkmark you trust.**
+
+> `proofcast run` is the **pure prover**: it only proves code that already exists
+> and makes no AI call, which is exactly why this trial needs no provider key.
+> Generating a feature (`proofcast generate`) or shipping one (`Déploie`) is the
+> configured path — see [Installation](#installation) below.
 
 ---
 

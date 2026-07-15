@@ -5,7 +5,9 @@
  *   proofcast run [dirPath]
  *     Pure executor. Proves the code already sitting in `dirPath` (via
  *     {@link proveCode}) and prints a machine-readable JSON report on stdout. It
- *     NEVER generates or fixes code.
+ *     NEVER generates or fixes code — and, because the prover makes no AI/network
+ *     call by construction, it does NOT require a provider API key. That is what
+ *     powers the keyless 2-minute local trial (`proofcast run ./examples/signup`).
  *
  *   proofcast generate "<description>" [dirPath]
  *     Autonomous pipeline. Delegates to {@link executeAndHeal} (generate → prove →
@@ -85,8 +87,14 @@ function withDefaults(overrides: Partial<CliDependencies> = {}): CliDependencies
 
 /**
  * `proofcast run [dirPath]` — prove existing code, print JSON, return an exit code.
- * Loads the config purely as a coherence check (it must be a validly configured
- * install).
+ *
+ * `run` is a PURE prover: it boots + drives + reports, and (unlike `generate`)
+ * makes no AI/network call. So a missing or invalid `.proofcast-config.json` is
+ * NOT fatal here — proving existing code needs no provider key. We still attempt
+ * to load the config and, if it is broken, surface a non-fatal note on stderr so
+ * a genuinely misconfigured install is still visible; stdout stays a single JSON
+ * line either way. This is what lets the keyless local trial
+ * (`proofcast run ./examples/signup`) run with zero setup.
  */
 export async function proofcastRun(
   args: string[],
@@ -95,11 +103,14 @@ export async function proofcastRun(
   const deps = withDefaults(overrides);
   const dirPath = resolve(args[0] ?? process.cwd());
 
-  // Coherence check: fail early on a missing/invalid install config.
+  // Advisory only: a broken config never blocks a pure prove.
   try {
     await deps.loadConfig();
   } catch (err) {
-    return usageFailure(deps, `Configuration invalide : ${messageOf(err)}`);
+    deps.stderr(
+      `ProofCast : pas de configuration IA valide (${messageOf(err)}). ` +
+        `« run » prouve du code existant sans IA — on continue.`,
+    );
   }
 
   let report: ProofReport;

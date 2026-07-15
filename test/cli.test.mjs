@@ -93,7 +93,9 @@ test("run: a failed proof yields exit 1 and the typed errors on stdout (no AI ca
   assert.equal(h.calls.writeProof.length, 0, "no video written on failure");
 });
 
-test("run: an invalid config fails cleanly (stderr + valid JSON on stdout, exit 1)", async () => {
+test("run: a missing/invalid config is non-fatal — it still proves (warn on stderr, exit 0)", async () => {
+  // `run` is a pure prover: it makes no AI call, so a broken config must NOT
+  // block it. This is what makes the keyless local trial work.
   const h = harness({
     loadConfig: async () => {
       throw new Error("apiKey manquant");
@@ -101,12 +103,14 @@ test("run: an invalid config fails cleanly (stderr + valid JSON on stdout, exit 
   });
   const code = await proofcastRun(["/target"], h.deps);
 
-  assert.equal(code, 1);
-  assert.equal(h.calls.proveCode, 0, "never proves on a broken config");
-  assert.ok(h.err.length >= 1, "human message on stderr");
+  assert.equal(code, 0, "proving existing code needs no provider key");
+  assert.equal(h.calls.proveCode, 1, "it still proves despite the missing config");
+  assert.ok(
+    h.err.join("\n").includes("apiKey manquant"),
+    "the config problem is surfaced as a non-fatal note on stderr",
+  );
   const json = stdoutJson(h.out);
-  assert.equal(json.success, false);
-  assert.match(json.error, /apiKey manquant/, "stdout stays valid JSON — never a raw stack trace");
+  assert.equal(json.success, true, "stdout stays a single valid JSON line (the proof result)");
 });
 
 test("run: an unexpected prover throw becomes structured JSON, not a crash", async () => {
