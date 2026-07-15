@@ -7,7 +7,7 @@
 **Agents can write code and ship it. ProofCast makes them prove it works first — on video, in a real browser — before anything reaches production.**
 
 [![npm](https://img.shields.io/npm/v/proofcast?color=cb3837&logo=npm)](https://www.npmjs.com/package/proofcast)
-![Tests](https://img.shields.io/badge/tests-passing-2ea44f)
+[![CI](https://github.com/guillaumeCode2012/proofcast/actions/workflows/ci.yml/badge.svg)](https://github.com/guillaumeCode2012/proofcast/actions/workflows/ci.yml)
 ![Node](https://img.shields.io/badge/node-%E2%89%A518.17-3c873a)
 ![TypeScript](https://img.shields.io/badge/TypeScript-ESM-3178c6)
 ![License](https://img.shields.io/badge/license-MIT-blue)
