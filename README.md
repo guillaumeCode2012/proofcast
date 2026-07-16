@@ -78,6 +78,8 @@ npx proofcast run ./path/to/your-app --share --open
 
 ### Shareable proofs
 
+<img src="docs/shareable-proof.png" alt="A ProofCast shareable proof page: a recorded checkout playing in a video player (payment successful, order confirmed), with the typed report below — feature, PASSED, duration, timestamp." width="620" />
+
 Add **`--share`** to any command to get a portable `proof-<id>/` folder: a
 self-contained `index.html` that plays the recorded MP4 and shows the report —
 feature, pass/fail, duration, timestamp — with no backend and no CDN, so it works
