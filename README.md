@@ -50,26 +50,40 @@ example — **no API key, no Telegram, no Vercel, and no Docker required:**
 git clone https://github.com/guillaumeCode2012/proofcast.git
 cd proofcast
 npm install
-npm run demo          # == npx proofcast run ./examples/signup
+npm run demo          # == npx proofcast demo --share
 ```
 
-ProofCast boots the bundled example ([examples/signup](examples/signup)), drives
-its signup form in a **real Chromium** — types an email and a password, submits,
-and watches the account get created — records the session, and transcodes it to
-an **MP4**. It prints one line of JSON and writes the video next to the example:
+ProofCast boots a bundled example — a product **checkout**
+([examples/checkout](examples/checkout)) — drives it in a **real Chromium** (types
+the test card `4242 4242 4242 4242`, clicks *Pay $149.00*, and watches the payment
+succeed), records the session, and transcodes it to an **MP4**. With `--share` it
+also writes a self-contained, shareable proof page. It prints one JSON line:
 
 ```json
-{ "success": true, "proofPath": "examples/signup/proofcast-proof.mp4", "durationMs": 3535 }
+{ "success": true, "proofPath": ".../proofcast-demo-proof.mp4", "sharePath": ".../proof-<id>/index.html", "durationMs": 4900 }
 ```
 
-Exit code `0` means the proof passed (non-zero otherwise, so you can script on
-it). Open `examples/signup/proofcast-proof.mp4` and watch it — that is the whole
-point: **evidence you can play, not a checkmark you trust.**
+Exit code `0` means the proof passed. Open the MP4 — or open `sharePath` in a
+browser — and watch it. That is the whole point: **evidence you can play, not a
+checkmark you trust.** Point `proofcast run` at your **own** project the same way:
 
-> `proofcast run` is the **pure prover**: it only proves code that already exists
-> and makes no AI call, which is exactly why this trial needs no provider key.
-> Generating a feature (`proofcast generate`) or shipping one (`Déploie`) is the
-> configured path — see [Installation](#installation) below.
+```bash
+npx proofcast run ./path/to/your-app --share --open
+```
+
+> `proofcast run` / `demo` is the **pure prover**: it only proves code and makes no
+> AI call, which is why this trial needs no provider key. Generating a feature
+> (`proofcast generate`) or shipping one (`Déploie`) is the configured path — see
+> [Installation](#installation) below.
+
+### Shareable proofs
+
+Add **`--share`** to any command to get a portable `proof-<id>/` folder: a
+self-contained `index.html` that plays the recorded MP4 and shows the report —
+feature, pass/fail, duration, timestamp — with no backend and no CDN, so it works
+by opening the file directly (`file://`) **and** on any static host. Its path comes
+back on stdout as `sharePath`. Add **`--open`** to pop it straight into your
+default browser.
 
 ---
 

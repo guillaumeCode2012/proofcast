@@ -37,6 +37,28 @@ const TALL_HTML = `<!doctype html><html><body style="margin:0">
 <div id="footer">bottom</div>
 </body></html>`;
 
+/** A checkout with a real card form whose submit reports a successful payment. */
+const CHECKOUT_HTML = `<!doctype html><html><body>
+<h1>Nova ANC Headphones — $149.00</h1>
+<form id="f">
+  <input id="cardnumber" name="cardnumber" autocomplete="cc-number" placeholder="1234 1234 1234 1234">
+  <input id="ccname" name="ccname" autocomplete="cc-name" type="text" placeholder="Name on card">
+  <input id="ccexp" name="ccexp" autocomplete="cc-exp" placeholder="MM / YY">
+  <input id="cccvc" name="cccvc" autocomplete="cc-csc" placeholder="CVC">
+  <button type="submit">Pay $149.00</button>
+</form>
+<div id="result"></div>
+<script>
+  document.getElementById('f').addEventListener('submit', function (e) {
+    e.preventDefault();
+    var card = document.getElementById('cardnumber').value.replace(/\\s+/g, '');
+    if (card.length >= 12) {
+      document.getElementById('result').textContent = 'Payment successful — card ending ' + card.slice(-4);
+    }
+  });
+</script>
+</body></html>`;
+
 function isPortClosed(port) {
   return new Promise((resolve) => {
     const socket = net.connect({ port, host: "127.0.0.1" });
@@ -115,6 +137,44 @@ test("smartDemo adapts: scrolls a landing page (no auth form)", async () => {
     assert.ok(
       (await page.evaluate(() => window.scrollY)) > 0,
       "a landing page (no password field) should be scrolled",
+    );
+  } finally {
+    await browser.close();
+  }
+});
+
+test("autoFillDemoForm drives a checkout: fills the card and pays (payment successful)", async () => {
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage();
+    await page.setContent(CHECKOUT_HTML);
+
+    await autoFillDemoForm(page);
+
+    assert.equal(await page.locator("#cardnumber").inputValue(), "4242 4242 4242 4242", "test card typed");
+    assert.equal(await page.locator("#ccexp").inputValue(), "12 / 28");
+    assert.equal(await page.locator("#cccvc").inputValue(), "123");
+    assert.equal(await page.locator("#ccname").inputValue(), "Demo User", "name-on-card gets the name, not the card number");
+    assert.match(
+      await page.locator("#result").textContent(),
+      /Payment successful — card ending 4242/,
+      "clicking Pay completes the payment",
+    );
+  } finally {
+    await browser.close();
+  }
+});
+
+test("smartDemo adapts: drives a checkout (card-number field, no password)", async () => {
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage();
+    await page.setContent(CHECKOUT_HTML);
+    await smartDemo(page);
+    assert.match(
+      await page.locator("#result").textContent(),
+      /Payment successful/,
+      "a checkout (cc-number field) should be filled and paid, not scrolled",
     );
   } finally {
     await browser.close();

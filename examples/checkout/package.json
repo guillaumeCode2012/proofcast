@@ -1,0 +1,11 @@
+{
+  "name": "proofcast-example-checkout",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Zero-dependency product checkout (real card payment) — the target of `proofcast demo`.",
+  "type": "module",
+  "scripts": {
+    "build": "node -e \"process.stdout.write('no build needed\\n')\"",
+    "start": "node server.js"
+  }
+}

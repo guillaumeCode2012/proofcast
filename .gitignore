@@ -20,6 +20,8 @@ proofcast-live.md
 *.webm
 *.mp4
 demos/
+# Shareable proof folders emitted by `--share`
+proof-*/
 playwright-report/
 test-results/
 

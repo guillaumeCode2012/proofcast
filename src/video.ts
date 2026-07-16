@@ -66,7 +66,7 @@ const DEFAULT_DEMO_HTML = `<!doctype html>
 <body><div class="card"><h1>ProofCast</h1><p>Recording proof <span class="pulse"></span></p></div></body>
 </html>`;
 
-/** Sample values used to demonstrate a form (login/signup) in the recording. */
+/** Sample values used to demonstrate a form (login / signup / checkout) in the recording. */
 export interface DemoFormData {
   /** Value typed into email fields. */
   email?: string;
@@ -74,25 +74,40 @@ export interface DemoFormData {
   password?: string;
   /** Value typed into other plain text fields (name, username, ...). */
   text?: string;
+  /** Value typed into a credit-card number field (checkout flows). */
+  cardNumber?: string;
+  /** Value typed into a card expiry field. */
+  cardExpiry?: string;
+  /** Value typed into a card CVC/CVV field. */
+  cardCvc?: string;
 }
 
 const DEMO_FORM_DEFAULTS = {
   email: "demo.user@example.com",
   password: "S3curePassw0rd!",
   text: "Demo User",
+  // A universally-recognised test card (Stripe's 4242…) — never a real number.
+  cardNumber: "4242 4242 4242 4242",
+  cardExpiry: "12 / 28",
+  cardCvc: "123",
 } as const;
 
 /**
  * Demonstrate a feature by filling its form the way a user would and submitting.
- * Fills email fields, password fields, then any other plain text fields, and
- * clicks the primary submit button. No-op on pages without matching inputs
- * (e.g. the default demo page). Best-effort: individual fields are skipped
- * rather than throwing, so an unusual layout never breaks the recording.
+ * Handles auth forms (email + password) AND checkout forms (card number, expiry,
+ * CVC), then any remaining plain text field (name on card, username, ...), and
+ * clicks the primary submit button (Create / Sign up / Pay / Buy / Checkout / ...).
+ * No-op on pages without matching inputs (e.g. a static landing page). Best-effort:
+ * individual fields are skipped rather than throwing, so an unusual layout never
+ * breaks the recording.
  */
 export async function autoFillDemoForm(page: Page, data: DemoFormData = {}): Promise<void> {
   const email = data.email ?? DEMO_FORM_DEFAULTS.email;
   const password = data.password ?? DEMO_FORM_DEFAULTS.password;
   const text = data.text ?? DEMO_FORM_DEFAULTS.text;
+  const cardNumber = data.cardNumber ?? DEMO_FORM_DEFAULTS.cardNumber;
+  const cardExpiry = data.cardExpiry ?? DEMO_FORM_DEFAULTS.cardExpiry;
+  const cardCvc = data.cardCvc ?? DEMO_FORM_DEFAULTS.cardCvc;
 
   await fillVisibleFields(
     page,
@@ -100,6 +115,26 @@ export async function autoFillDemoForm(page: Page, data: DemoFormData = {}): Pro
     email,
   );
   await fillVisibleFields(page, 'input[type="password"]', password);
+
+  // Payment fields (checkout) — filled BEFORE the generic text pass so a card
+  // number is never clobbered with a name, and the "name on card" field still
+  // gets the name. Standard `autocomplete` tokens match real payment forms.
+  await fillVisibleFields(
+    page,
+    'input[autocomplete="cc-number"], input[name="cardnumber"], input[name*="card-number" i], input[placeholder*="card number" i], input[placeholder*="1234 1234" i]',
+    cardNumber,
+  );
+  await fillVisibleFields(
+    page,
+    'input[autocomplete="cc-exp"], input[name*="exp" i], input[placeholder*="mm/yy" i], input[placeholder*="mm / yy" i]',
+    cardExpiry,
+  );
+  await fillVisibleFields(
+    page,
+    'input[autocomplete="cc-csc"], input[name*="cvc" i], input[name*="cvv" i], input[placeholder*="cvc" i], input[placeholder*="cvv" i]',
+    cardCvc,
+  );
+
   await fillVisibleFields(
     page,
     'input:not([type]), input[type="text"], input[type="search"], input[type="tel"]',
@@ -118,6 +153,11 @@ export async function autoFillDemoForm(page: Page, data: DemoFormData = {}): Pro
         'button:has-text("Log in")',
         'button:has-text("Login")',
         'button:has-text("Continue")',
+        'button:has-text("Pay")',
+        'button:has-text("Buy")',
+        'button:has-text("Checkout")',
+        'button:has-text("Place order")',
+        'button:has-text("Complete")',
       ].join(", "),
     )
     .first();
@@ -215,14 +255,16 @@ export async function runDemoActions(
 }
 
 /**
- * Adaptive default demo: if the page has an auth form (a password field), fill
- * it in and submit — demonstrating a login / account creation; otherwise scroll
- * through the page (landing / static content). The agent can always override
- * with explicit `actions` or `onPage`.
+ * Adaptive default demo: if the page has a fillable form — an auth form (a
+ * password field) or a checkout (a card-number field) — fill it in and submit,
+ * demonstrating a real login / account creation / card payment; otherwise scroll
+ * through the page (landing / static content). The agent can always override with
+ * explicit `actions` or `onPage`.
  */
 export async function smartDemo(page: Page, formData?: DemoFormData): Promise<void> {
-  const hasAuthForm = (await page.locator('input[type="password"]').count()) > 0;
-  if (hasAuthForm) {
+  const hasFillableForm =
+    (await page.locator('input[type="password"], input[autocomplete="cc-number"]').count()) > 0;
+  if (hasFillableForm) {
     await autoFillDemoForm(page, formData);
   } else {
     await scrollThrough(page);

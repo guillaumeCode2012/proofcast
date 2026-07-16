@@ -356,7 +356,7 @@ export async function proofcastDemo(
       const sharePath = await buildShareFolder(deps, flags, {
         outDir,
         video: report.video,
-        feature: "ProofCast demo — signup example",
+        feature: "Checkout — Nova ANC Headphones ($149.00)",
         durationMs: deps.now() - start,
       });
       emit(deps, { success: true, proofPath, sharePath, durationMs: deps.now() - start });
@@ -451,7 +451,7 @@ function usageOutput(): CliOutput & { commands: string[] } {
  * and from an installed package.
  */
 function bundledExampleDir(): string {
-  return fileURLToPath(new URL("../examples/signup", import.meta.url));
+  return fileURLToPath(new URL("../examples/checkout", import.meta.url));
 }
 
 /** True when a path exists (never throws). */
