@@ -32,6 +32,7 @@
  */
 
 import { cp, mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { basename, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -101,8 +102,12 @@ function withDefaults(overrides: Partial<CliDependencies> = {}): CliDependencies
       ((dirPath) => defaultProveCode(dirPath, { execution: isDockerAvailable() ? "docker" : "local" })),
     // Force LOCAL: the demo must run from any empty folder without Docker. The
     // bundled example is our own trusted, zero-dependency code, so running it on
-    // the host is safe.
-    proveDemo: overrides.proveDemo ?? ((dirPath) => defaultProveCode(dirPath, { execution: "local" })),
+    // the host is safe. Use a FREE port (not the fixed 3000): the example honours
+    // $PORT, so this survives a user who already has 3000 in use — and lets two
+    // demos run concurrently (e.g. parallel test files) without colliding.
+    proveDemo:
+      overrides.proveDemo ??
+      (async (dirPath) => defaultProveCode(dirPath, { execution: "local", port: await freePort() })),
     executeAndHeal:
       overrides.executeAndHeal ??
       ((description, dirPath, maxRetries) =>
@@ -457,6 +462,19 @@ async function pathExists(p: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/** Ask the OS for a free loopback TCP port (avoids a hardcoded 3000 collision). */
+function freePort(): Promise<number> {
+  return new Promise((resolvePort, rejectPort) => {
+    const srv = createServer();
+    srv.once("error", rejectPort);
+    srv.listen(0, "127.0.0.1", () => {
+      const address = srv.address();
+      const port = address && typeof address === "object" ? address.port : 0;
+      srv.close(() => (port ? resolvePort(port) : rejectPort(new Error("Could not obtain a free port."))));
+    });
+  });
 }
 
 /** Message of an unknown error value. */
