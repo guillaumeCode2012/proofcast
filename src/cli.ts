@@ -19,6 +19,11 @@
  *     package) in a real browser and writes a real MP4 — from ANY empty folder, with
  *     no user files, no API key, no Telegram, no Vercel, and no Docker.
  *
+ * Flags (all commands): `--share` also writes a self-contained, portable
+ * `proof-<id>/` folder (an `index.html` that plays the video + shows the report,
+ * openable via file:// or any static host, no CDN); `--open` opens it in the
+ * default browser (implies `--share`). On `--share`, stdout gains a `sharePath`.
+ *
  * Output contract (so agents can script on it reliably):
  *   - stdout carries EXACTLY ONE line of JSON (a {@link CliOutput}), always valid —
  *     never a raw stack trace, even on an unexpected failure.
@@ -28,13 +33,19 @@
 
 import { cp, mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, relative, resolve } from "node:path";
+import { basename, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { loadConfig as defaultLoadConfig, type ProofCastConfig } from "./config.js";
 import { proveCode as defaultProveCode, type ProofError, type ProofReport } from "./prover.js";
 import { executeAndHeal as defaultExecuteAndHeal, type HealResult } from "./orchestrator.js";
 import { isDockerAvailable } from "./sandbox.js";
+import {
+  openInBrowser as defaultOpenInBrowser,
+  writeShareableProof as defaultWriteShareableProof,
+  type ShareableProofInput,
+  type ShareableProofResult,
+} from "./share.js";
 
 /** Default repair-attempt budget for `generate` (README documents "up to 3"). */
 export const DEFAULT_MAX_RETRIES = 3;
@@ -54,6 +65,8 @@ export const DEMO_PROOF_FILENAME = "proofcast-demo-proof.mp4";
 export interface CliOutput {
   success: boolean;
   proofPath?: string;
+  /** Path to the self-contained, shareable `index.html` (only when `--share`). */
+  sharePath?: string;
   errors?: ProofError[];
   error?: string;
   attempts?: number;
@@ -68,6 +81,10 @@ export interface CliDependencies {
   proveDemo: (dirPath: string) => Promise<ProofReport>;
   executeAndHeal: (description: string, dirPath: string, maxRetries: number) => Promise<HealResult>;
   writeProof: (proofPath: string, video: Buffer) => Promise<void>;
+  /** Build the self-contained shareable proof folder (`--share`). */
+  writeShare: (input: ShareableProofInput) => Promise<ShareableProofResult>;
+  /** Open a path in the default browser (`--open`); best-effort, cross-platform. */
+  openPath: (target: string) => Promise<void>;
   /** Environment the provider layer resolves its API key from (default `process.env`). */
   env: NodeJS.ProcessEnv;
   stdout: (line: string) => void;
@@ -93,11 +110,80 @@ function withDefaults(overrides: Partial<CliDependencies> = {}): CliDependencies
           execution: isDockerAvailable() ? "docker" : "local",
         })),
     writeProof: overrides.writeProof ?? (async (proofPath, video) => void (await writeFile(proofPath, video))),
+    writeShare: overrides.writeShare ?? ((input) => defaultWriteShareableProof(input)),
+    openPath: overrides.openPath ?? (async (target) => void defaultOpenInBrowser(target)),
     env: overrides.env ?? process.env,
     stdout: overrides.stdout ?? ((line) => void process.stdout.write(`${line}\n`)),
     stderr: overrides.stderr ?? ((line) => void process.stderr.write(`${line}\n`)),
     now: overrides.now ?? (() => Date.now()),
   };
+}
+
+/** Flags common to every command, split out from the positional arguments. */
+interface CliFlags {
+  /** `--share`: also emit a self-contained, shareable `proof-<id>/` folder. */
+  share: boolean;
+  /** `--open`: open the shareable page in the default browser (implies `--share`). */
+  open: boolean;
+}
+
+/** Split `--share` / `--open` out of `argv`, leaving the positional arguments untouched. */
+function parseCliArgs(argv: string[]): { positionals: string[]; flags: CliFlags } {
+  const positionals: string[] = [];
+  let share = false;
+  let open = false;
+  for (const arg of argv) {
+    if (arg === "--share") share = true;
+    else if (arg === "--open") open = true;
+    else positionals.push(arg);
+  }
+  // You cannot open a page that was never produced — `--open` implies `--share`.
+  if (open) share = true;
+  return { positionals, flags: { share, open } };
+}
+
+/** Metadata for a shareable proof folder, once a run has passed. */
+interface ShareContext {
+  outDir: string;
+  video: Buffer | undefined;
+  feature: string;
+  durationMs: number;
+  attempts?: number;
+}
+
+/**
+ * On `--share`, write the self-contained proof folder next to the proof and, on
+ * `--open`, open it in the browser (best-effort). Returns the `index.html` path
+ * for the JSON `sharePath` field, or `undefined` when sharing is off / there is no
+ * video. Never throws through: a share/open hiccup must not fail a passing proof.
+ */
+async function buildShareFolder(
+  deps: CliDependencies,
+  flags: CliFlags,
+  ctx: ShareContext,
+): Promise<string | undefined> {
+  if (!flags.share || !ctx.video || ctx.video.length === 0) {
+    return undefined;
+  }
+  try {
+    const result = await deps.writeShare({
+      feature: ctx.feature,
+      status: "passed",
+      durationMs: ctx.durationMs,
+      attempts: ctx.attempts,
+      video: ctx.video,
+      outDir: ctx.outDir,
+    });
+    if (flags.open) {
+      await deps.openPath(result.indexPath).catch(() => {
+        /* opening is a convenience — never fail the command over it */
+      });
+    }
+    return result.indexPath;
+  } catch (err) {
+    deps.stderr(`ProofCast : preuve partageable non générée (${messageOf(err)}).`);
+    return undefined;
+  }
 }
 
 /**
@@ -116,7 +202,8 @@ export async function proofcastRun(
   overrides: Partial<CliDependencies> = {},
 ): Promise<number> {
   const deps = withDefaults(overrides);
-  const dirPath = resolve(args[0] ?? process.cwd());
+  const { positionals, flags } = parseCliArgs(args);
+  const dirPath = resolve(positionals[0] ?? process.cwd());
 
   // Advisory only: a broken config never blocks a pure prove.
   try {
@@ -139,7 +226,13 @@ export async function proofcastRun(
 
   if (report.success) {
     const proofPath = await writeProofIfAny(deps, dirPath, report.video);
-    emit(deps, { success: true, proofPath, durationMs: report.durationMs });
+    const sharePath = await buildShareFolder(deps, flags, {
+      outDir: dirPath,
+      video: report.video,
+      feature: `Project: ${basename(dirPath)}`,
+      durationMs: report.durationMs,
+    });
+    emit(deps, { success: true, proofPath, sharePath, durationMs: report.durationMs });
     return 0;
   }
   emit(deps, { success: false, errors: report.errors, durationMs: report.durationMs });
@@ -154,12 +247,13 @@ export async function proofcastGenerate(
   overrides: Partial<CliDependencies> = {},
 ): Promise<number> {
   const deps = withDefaults(overrides);
+  const { positionals, flags } = parseCliArgs(args);
 
-  const description = args[0];
+  const description = positionals[0];
   if (typeof description !== "string" || description.trim().length === 0) {
-    return usageFailure(deps, 'Usage : proofcast generate "<description>" [dirPath]');
+    return usageFailure(deps, 'Usage : proofcast generate "<description>" [dirPath] [--share] [--open]');
   }
-  const dirPath = resolve(args[1] ?? process.cwd());
+  const dirPath = resolve(positionals[1] ?? process.cwd());
 
   let config: ProofCastConfig;
   try {
@@ -186,7 +280,14 @@ export async function proofcastGenerate(
 
   if (result.success) {
     const proofPath = await writeProofIfAny(deps, dirPath, result.video);
-    emit(deps, { success: true, proofPath, attempts: result.attempts, durationMs });
+    const sharePath = await buildShareFolder(deps, flags, {
+      outDir: dirPath,
+      video: result.video,
+      feature: description,
+      durationMs,
+      attempts: result.attempts,
+    });
+    emit(deps, { success: true, proofPath, sharePath, attempts: result.attempts, durationMs });
     return 0;
   }
   emit(deps, { success: false, error: result.lastError, attempts: result.attempts, durationMs });
@@ -208,7 +309,8 @@ export async function proofcastDemo(
   overrides: Partial<CliDependencies> = {},
 ): Promise<number> {
   const deps = withDefaults(overrides);
-  const outDir = resolve(args[0] ?? process.cwd());
+  const { positionals, flags } = parseCliArgs(args);
+  const outDir = resolve(positionals[0] ?? process.cwd());
   const start = deps.now();
 
   const exampleDir = bundledExampleDir();
@@ -246,7 +348,13 @@ export async function proofcastDemo(
       await mkdir(outDir, { recursive: true });
       const proofPath = join(outDir, DEMO_PROOF_FILENAME);
       await deps.writeProof(proofPath, report.video);
-      emit(deps, { success: true, proofPath, durationMs: deps.now() - start });
+      const sharePath = await buildShareFolder(deps, flags, {
+        outDir,
+        video: report.video,
+        feature: "ProofCast demo — signup example",
+        durationMs: deps.now() - start,
+      });
+      emit(deps, { success: true, proofPath, sharePath, durationMs: deps.now() - start });
       return 0;
     }
     emit(deps, { success: false, errors: report.errors, durationMs: deps.now() - start });
@@ -324,9 +432,9 @@ function usageOutput(): CliOutput & { commands: string[] } {
     success: true,
     durationMs: 0,
     commands: [
-      "proofcast run [dirPath]",
-      'proofcast generate "<description>" [dirPath]',
-      "proofcast demo [outDir]",
+      "proofcast run [dirPath] [--share] [--open]",
+      'proofcast generate "<description>" [dirPath] [--share] [--open]',
+      "proofcast demo [outDir] [--share] [--open]",
     ],
   };
 }

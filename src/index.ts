@@ -25,6 +25,7 @@ export * from "./orchestrator.js";
 export * from "./prover.js";
 export * from "./sandbox.js";
 export * from "./video.js";
+export * from "./share.js";
 export * from "./deployer.js";
 export * from "./bot.js";
 export * from "./path-resolver.js";

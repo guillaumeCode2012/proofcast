@@ -1,6 +1,6 @@
 {
   "name": "proofcast",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Proof-before-deploy engine for AI agents: build a feature, prove it works in a real browser (Playwright → MP4 video), and only deploy once the proof exists.",
   "type": "module",
   "license": "MIT",
@@ -38,7 +38,7 @@
     "setup": "node scripts/setup.mjs",
     "demo": "npm run build && node dist/cli.js run examples/signup",
     "typecheck": "tsc --noEmit",
-    "test": "tsc && node --test test/onboarding.test.mjs test/config.test.mjs test/ai.test.mjs test/context-analyzer.test.mjs test/orchestrator.test.mjs test/prover.test.mjs test/cli.test.mjs test/tools.test.mjs test/agent.test.mjs test/planner.test.mjs test/skills.test.mjs test/github.test.mjs test/daemon.test.mjs test/sandbox.test.mjs test/video.test.mjs test/deployer.test.mjs test/bot.test.mjs test/integration.test.mjs test/example.test.mjs test/path-resolver.test.mjs test/memory.test.mjs test/setup.test.mjs test/readme.test.mjs test/agents.test.mjs",
+    "test": "tsc && node --test test/onboarding.test.mjs test/config.test.mjs test/ai.test.mjs test/context-analyzer.test.mjs test/orchestrator.test.mjs test/prover.test.mjs test/cli.test.mjs test/tools.test.mjs test/agent.test.mjs test/planner.test.mjs test/skills.test.mjs test/github.test.mjs test/daemon.test.mjs test/sandbox.test.mjs test/video.test.mjs test/deployer.test.mjs test/bot.test.mjs test/integration.test.mjs test/example.test.mjs test/share.test.mjs test/path-resolver.test.mjs test/memory.test.mjs test/setup.test.mjs test/readme.test.mjs test/agents.test.mjs",
     "test:live": "tsc && node --test test/live.test.mjs",
     "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
     "prepublishOnly": "npm run clean && npm run build"
