@@ -31,6 +31,7 @@ import {
 } from "./memory.js";
 import { loadToken } from "./onboarding.js";
 import { executeAndHeal as defaultExecuteAndHeal } from "./orchestrator.js";
+import { safeHashSourceDir as defaultHashSource } from "./source-hash.js";
 import {
   DirectoryNotFoundError,
   isPathLikeHint,
@@ -53,6 +54,8 @@ export interface BotDependencies {
   resolveAnyDirectory: typeof defaultResolveAnyDirectory;
   /** Whether a usable Docker daemon is available (sandbox vs. local fallback). */
   isDockerAvailable: typeof defaultIsDockerAvailable;
+  /** Deterministic source hash of a directory — binds a proof to the code it proved. */
+  hashSource: (dir: string) => Promise<string | undefined>;
   /** Append a redacted reasoning entry to proofcast-live.md. */
   logLiveContext: (step: string, details: string) => void;
   /** Persist a redacted entry to the project-scoped memory (fatal errors). */
@@ -67,6 +70,7 @@ const DEFAULT_DEPS: BotDependencies = {
   executeAndHeal: defaultExecuteAndHeal,
   resolveAnyDirectory: defaultResolveAnyDirectory,
   isDockerAvailable: defaultIsDockerAvailable,
+  hashSource: defaultHashSource,
   logLiveContext: defaultLogLiveContext,
   writeMemory: defaultWriteMemory,
 };
@@ -108,6 +112,14 @@ export interface VideoExtra {
 /** Per-chat state: whether a video proof has been produced this session. */
 export interface ChatState {
   demoReady: boolean;
+  /**
+   * When the proof was recorded against a real directory (brownfield), the directory
+   * and the hash of the code proved. « Déploie » re-verifies the code is unchanged
+   * since — so proving then editing then deploying the unproven version is refused.
+   * Left unset for a greenfield demo (the generated code is in-memory, not on disk).
+   */
+  provenDir?: string;
+  provenSourceHash?: string;
 }
 
 export function createChatState(): ChatState {
@@ -306,6 +318,11 @@ async function runBrownfieldDemo(
 
   deps.logLiveContext("demo", `proof recorded (brownfield) in ${result.attempts} attempt(s)`);
   state.demoReady = true;
+  // Bind this proof to the exact code it proved so « Déploie » can refuse a codebase
+  // that changed since. Best-effort: if hashing fails we keep the session deployable
+  // on demoReady alone rather than block on an infrastructure hiccup.
+  state.provenDir = dir;
+  state.provenSourceHash = await deps.hashSource(dir);
 
   if (result.video.length === 0) {
     await ctx.reply(
@@ -345,6 +362,19 @@ export async function runDeployCommand(
         "🚫 Lance d'abord « Démo ». ProofCast exige une preuve vidéo avant tout déploiement.",
       );
       return;
+    }
+    // If the proof was tied to a directory, re-verify the code is unchanged since —
+    // same "no proof, no prod" discipline as the CLI deploy gate, no override.
+    if (state.provenDir && state.provenSourceHash) {
+      const currentHash = await deps.hashSource(state.provenDir);
+      if (currentHash !== state.provenSourceHash) {
+        deps.logLiveContext("deploy", "blocked: code changed since the last proof");
+        await ctx.reply(
+          "🚫 Le code a changé depuis la dernière preuve. Relance « Démo » pour reprouver " +
+            "le code actuel avant de déployer. Pas de preuve à jour, pas de prod.",
+        );
+        return;
+      }
     }
     deps.logLiveContext("deploy", "starting");
     await ctx.reply("🚀 Déploiement en production…");

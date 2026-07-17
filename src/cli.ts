@@ -19,6 +19,14 @@
  *     package) in a real browser and writes a real MP4 — from ANY empty folder, with
  *     no user files, no API key, no Telegram, no Vercel, and no Docker.
  *
+ *   proofcast deploy [dirPath]
+ *     Real Vercel production deploy — but GATED. It refuses unless a proof video
+ *     for `dirPath` exists this session (one written by `run` / `generate` / `demo`),
+ *     the same "no proof, no prod" rule the Telegram bot enforces on « Déploie »,
+ *     with no override. On success it prints the production URL as `deploymentUrl`.
+ *     Auth is a browser flow only the user can complete: if you are not logged in,
+ *     it says so and stops (`vercel login`) — it never logs in for you, never polls.
+ *
  * Flags (all commands): `--share` also writes a self-contained, portable
  * `proof-<id>/` folder (an `index.html` that plays the video + shows the report,
  * openable via file:// or any static host, no CDN); `--open` opens it in the
@@ -38,6 +46,20 @@ import { basename, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { loadConfig as defaultLoadConfig, type ProofCastConfig } from "./config.js";
+import {
+  deployWithVercel as defaultDeployWithVercel,
+  type DeployOptions,
+  type DeployResult,
+} from "./deployer.js";
+import { createProofGate } from "./gate.js";
+import {
+  DEMO_PROOF_FILENAME,
+  PROOF_FILENAME,
+  verifyProofArtifact as defaultVerifyProofArtifact,
+  writeProofManifest as defaultWriteProofManifest,
+  type ProofVerification,
+  type WriteManifestInput,
+} from "./proof-manifest.js";
 import { proveCode as defaultProveCode, type ProofError, type ProofReport } from "./prover.js";
 import { executeAndHeal as defaultExecuteAndHeal, type HealResult } from "./orchestrator.js";
 import { isDockerAvailable } from "./sandbox.js";
@@ -51,11 +73,10 @@ import {
 /** Default repair-attempt budget for `generate` (README documents "up to 3"). */
 export const DEFAULT_MAX_RETRIES = 3;
 
-/** Filename of the proof video written into the target directory on success. */
-export const PROOF_FILENAME = "proofcast-proof.mp4";
-
-/** Filename of the proof video written by `proofcast demo`. */
-export const DEMO_PROOF_FILENAME = "proofcast-demo-proof.mp4";
+// Proof video filenames now live with the manifest logic that binds them to source;
+// re-exported here so existing importers (`import { PROOF_FILENAME } from "./cli.js"`)
+// keep working.
+export { PROOF_FILENAME, DEMO_PROOF_FILENAME, SESSION_PROOF_FILENAMES } from "./proof-manifest.js";
 
 /**
  * The single JSON object printed on stdout by every command. A superset of the
@@ -68,6 +89,8 @@ export interface CliOutput {
   proofPath?: string;
   /** Path to the self-contained, shareable `index.html` (only when `--share`). */
   sharePath?: string;
+  /** Production URL of a successful `proofcast deploy`. */
+  deploymentUrl?: string;
   errors?: ProofError[];
   error?: string;
   attempts?: number;
@@ -81,7 +104,15 @@ export interface CliDependencies {
   /** Prove the bundled demo project. Defaults to LOCAL execution — no Docker, so the demo is truly zero-setup. */
   proveDemo: (dirPath: string) => Promise<ProofReport>;
   executeAndHeal: (description: string, dirPath: string, maxRetries: number) => Promise<HealResult>;
+  /** Real Vercel production deploy (injectable so tests never touch the network). */
+  deployWithVercel: (options?: DeployOptions) => DeployResult;
+  /** Verify a proof for `dir` is bound to its CURRENT source (the deploy gate's signal). */
+  verifyProof: (dir: string) => Promise<ProofVerification>;
+  /** Whether `dir` exists and is a directory (a clear "not found" before deploy). */
+  dirExists: (dir: string) => Promise<boolean>;
   writeProof: (proofPath: string, video: Buffer) => Promise<void>;
+  /** Stamp the JSON sidecar that binds a written proof video to the code it proves. */
+  writeProofManifest: (dir: string, proofFilename: string, input: WriteManifestInput) => Promise<void>;
   /** Build the self-contained shareable proof folder (`--share`). */
   writeShare: (input: ShareableProofInput) => Promise<ShareableProofResult>;
   /** Open a path in the default browser (`--open`); best-effort, cross-platform. */
@@ -114,7 +145,13 @@ function withDefaults(overrides: Partial<CliDependencies> = {}): CliDependencies
         defaultExecuteAndHeal(description, dirPath, maxRetries, {
           execution: isDockerAvailable() ? "docker" : "local",
         })),
+    deployWithVercel: overrides.deployWithVercel ?? ((options) => defaultDeployWithVercel(options)),
+    verifyProof: overrides.verifyProof ?? ((dir) => defaultVerifyProofArtifact(dir)),
+    dirExists: overrides.dirExists ?? ((dir) => isDirectory(dir)),
     writeProof: overrides.writeProof ?? (async (proofPath, video) => void (await writeFile(proofPath, video))),
+    writeProofManifest:
+      overrides.writeProofManifest ??
+      (async (dir, proofFilename, input) => void (await defaultWriteProofManifest(dir, proofFilename, input))),
     writeShare: overrides.writeShare ?? ((input) => defaultWriteShareableProof(input)),
     openPath: overrides.openPath ?? (async (target) => void defaultOpenInBrowser(target)),
     env: overrides.env ?? process.env,
@@ -230,11 +267,17 @@ export async function proofcastRun(
   }
 
   if (report.success) {
+    const feature = `Project: ${basename(dirPath)}`;
     const proofPath = await writeProofIfAny(deps, dirPath, report.video);
+    // Bind the proof to the code it just proved so `proofcast deploy` can refuse a
+    // changed codebase. The sidecar lives next to the proof video, in `dirPath`.
+    if (proofPath) {
+      await deps.writeProofManifest(dirPath, PROOF_FILENAME, { sourceHash: report.sourceHash ?? null, feature });
+    }
     const sharePath = await buildShareFolder(deps, flags, {
       outDir: dirPath,
       video: report.video,
-      feature: `Project: ${basename(dirPath)}`,
+      feature,
       durationMs: report.durationMs,
     });
     emit(deps, { success: true, proofPath, sharePath, durationMs: report.durationMs });
@@ -285,6 +328,12 @@ export async function proofcastGenerate(
 
   if (result.success) {
     const proofPath = await writeProofIfAny(deps, dirPath, result.video);
+    if (proofPath) {
+      await deps.writeProofManifest(dirPath, PROOF_FILENAME, {
+        sourceHash: result.sourceHash ?? null,
+        feature: description,
+      });
+    }
     const sharePath = await buildShareFolder(deps, flags, {
       outDir: dirPath,
       video: result.video,
@@ -351,12 +400,20 @@ export async function proofcastDemo(
 
     if (report.success && report.video && report.video.length > 0) {
       await mkdir(outDir, { recursive: true });
+      const feature = "Checkout — Nova ANC Headphones ($149.00)";
       const proofPath = join(outDir, DEMO_PROOF_FILENAME);
       await deps.writeProof(proofPath, report.video);
+      // The sidecar records the hash of the PROVEN example (not `outDir`), so a demo
+      // trial can never authorize deploying an unrelated directory — the deploy gate
+      // recomputes `outDir`'s hash and it won't match. Honest by construction.
+      await deps.writeProofManifest(outDir, DEMO_PROOF_FILENAME, {
+        sourceHash: report.sourceHash ?? null,
+        feature,
+      });
       const sharePath = await buildShareFolder(deps, flags, {
         outDir,
         video: report.video,
-        feature: "Checkout — Nova ANC Headphones ($149.00)",
+        feature,
         durationMs: deps.now() - start,
       });
       emit(deps, { success: true, proofPath, sharePath, durationMs: deps.now() - start });
@@ -373,6 +430,83 @@ export async function proofcastDemo(
   }
 }
 
+/** Internal tool name the deploy gate protects (kept in sync with the bot's « Déploie »). */
+const DEPLOY_TOOL = "vercel_deploy";
+
+/** Veto message when NO proof exists for the directory — actionable, no override. */
+export const DEPLOY_NO_PROOF_REASON =
+  "🚫 Déploiement bloqué : aucune preuve pour ce dossier cette session. " +
+  "Enregistre-en une d'abord — `proofcast run <dir>` (ou `proofcast demo`) — puis relance. " +
+  "Pas de preuve, pas de prod. Aucun override.";
+
+/** Veto message when a proof exists but the code changed since — no override. */
+export const DEPLOY_STALE_REASON =
+  "🚫 Déploiement bloqué : le code a changé depuis la dernière preuve. " +
+  "Relance `proofcast run <dir>` (ou `proofcast demo`) pour reprouver le code actuel avant de déployer. " +
+  "Pas de preuve à jour, pas de prod. Aucun override.";
+
+/**
+ * `proofcast deploy [dirPath]` — REAL, proof-gated Vercel production deploy.
+ *
+ * The gate is the product's core discipline and has NO override. It ships only when
+ * a proof for `dirPath` is bound to its CURRENT source: a proof video + sidecar
+ * whose stored source hash matches a fresh hash of the directory (see
+ * {@link verifyProofArtifact}). If no proof exists, or the code changed since the
+ * last proof, the deploy is refused with a precise message. Only once the gate
+ * passes does it invoke the real `vercel --yes --prod`.
+ *
+ * Auth is a browser OAuth flow only the human can complete: an unauthenticated
+ * deploy fails with a clear "run `vercel login` then retry" — never a login
+ * attempt, never a poll (see AGENTS.md).
+ */
+export async function proofcastDeploy(
+  args: string[],
+  overrides: Partial<CliDependencies> = {},
+): Promise<number> {
+  const deps = withDefaults(overrides);
+  const { positionals } = parseCliArgs(args);
+  const dirPath = resolve(positionals[0] ?? process.cwd());
+  const start = deps.now();
+
+  // A precise "not found" beats a misleading "no proof" for a typo'd path.
+  if (!(await deps.dirExists(dirPath))) {
+    return usageFailure(deps, `Dossier introuvable : ${dirPath}. Vérifie le chemin du projet à déployer.`);
+  }
+
+  // The proof-before-deploy gate — same fail-closed guard as the agent loop, no
+  // override — now BOUND to the code: the proof must match the directory's current
+  // source, so proving then editing then deploying the unproven version is refused.
+  const verification = await deps.verifyProof(dirPath);
+  const gate = createProofGate({
+    protectedTools: [DEPLOY_TOOL],
+    isProofReady: () => verification.status === "verified",
+    reason: DEPLOY_NO_PROOF_REASON,
+  });
+  const decision = await gate(DEPLOY_TOOL, undefined);
+  if (!decision.allow) {
+    const reason = verification.status === "stale" ? DEPLOY_STALE_REASON : DEPLOY_NO_PROOF_REASON;
+    deps.stderr(reason);
+    emit(deps, { success: false, error: reason, durationMs: deps.now() - start });
+    return 1;
+  }
+
+  // Proof exists → run the REAL deploy. deployWithVercel classifies a missing
+  // login as VercelNotAuthenticatedError (with the exact next step) and a broken
+  // build as DeploymentFailedError — either way its message is user-ready.
+  let result: DeployResult;
+  try {
+    result = deps.deployWithVercel({ cwd: dirPath });
+  } catch (err) {
+    const message = messageOf(err);
+    deps.stderr(`❌ Déploiement échoué : ${message}`);
+    emit(deps, { success: false, error: message, durationMs: deps.now() - start });
+    return 1;
+  }
+
+  emit(deps, { success: true, deploymentUrl: result.url, durationMs: deps.now() - start });
+  return 0;
+}
+
 /** Route `argv` to a subcommand and return its exit code. */
 export async function runCli(argv: string[], overrides: Partial<CliDependencies> = {}): Promise<number> {
   const [subcommand, ...rest] = argv;
@@ -383,6 +517,8 @@ export async function runCli(argv: string[], overrides: Partial<CliDependencies>
       return proofcastGenerate(rest, overrides);
     case "demo":
       return proofcastDemo(rest, overrides);
+    case "deploy":
+      return proofcastDeploy(rest, overrides);
     case undefined:
     case "help":
     case "--help":
@@ -391,7 +527,7 @@ export async function runCli(argv: string[], overrides: Partial<CliDependencies>
       return 0;
     default: {
       const deps = withDefaults(overrides);
-      deps.stderr(`Commande inconnue : ${subcommand}. Utilise 'run', 'generate' ou 'demo'.`);
+      deps.stderr(`Commande inconnue : ${subcommand}. Utilise 'run', 'generate', 'demo' ou 'deploy'.`);
       emit(deps, { success: false, error: `Unknown command: ${subcommand}`, durationMs: 0 });
       return 1;
     }
@@ -440,6 +576,7 @@ function usageOutput(): CliOutput & { commands: string[] } {
       "proofcast run [dirPath] [--share] [--open]",
       'proofcast generate "<description>" [dirPath] [--share] [--open]',
       "proofcast demo [outDir] [--share] [--open]",
+      "proofcast deploy [dirPath]",
     ],
   };
 }
@@ -459,6 +596,15 @@ async function pathExists(p: string): Promise<boolean> {
   try {
     await stat(p);
     return true;
+  } catch {
+    return false;
+  }
+}
+
+/** True when `p` exists and is a directory (never throws). */
+async function isDirectory(p: string): Promise<boolean> {
+  try {
+    return (await stat(p)).isDirectory();
   } catch {
     return false;
   }

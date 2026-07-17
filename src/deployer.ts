@@ -13,6 +13,7 @@
  */
 
 import { execSync, type ExecSyncOptions } from "node:child_process";
+import { existsSync } from "node:fs";
 
 /** Signature of the exec function — injectable so tests can mock `execSync`. */
 export type ExecFn = (command: string, options?: ExecSyncOptions) => string | Buffer;
@@ -25,6 +26,22 @@ export class VercelCliNotFoundError extends Error {
         "`vercel login` (browser flow) before deploying.",
     );
     this.name = "VercelCliNotFoundError";
+  }
+}
+
+/**
+ * Thrown when Vercel is installed but the user is not logged in. Auth is a
+ * browser OAuth flow that ONLY the human can complete — ProofCast never
+ * automates it and never polls. We detect the state and tell the user exactly
+ * what to do, once.
+ */
+export class VercelNotAuthenticatedError extends Error {
+  constructor() {
+    super(
+      "Not logged in to Vercel. Run `vercel login` (browser flow — only you can " +
+        "complete it), then re-run the deploy. ProofCast never logs in for you.",
+    );
+    this.name = "VercelNotAuthenticatedError";
   }
 }
 
@@ -80,6 +97,19 @@ export interface DeployResult {
 /** Allowlist for CLI arguments: no whitespace, no shell metacharacters. */
 const SAFE_ARG = /^[A-Za-z0-9._:@/=-]+$/;
 
+/**
+ * Signals in Vercel's output that mean "you are not authenticated" rather than
+ * "your build broke". Used to turn an opaque non-zero exit into an actionable
+ * {@link VercelNotAuthenticatedError} pointing the user at `vercel login`.
+ */
+const AUTH_HINT_RE =
+  /no existing credentials|not (?:currently )?logged in|vercel login|please log ?in|not authenticated|credentials found/i;
+
+/** True when Vercel output looks like an authentication problem (see {@link AUTH_HINT_RE}). */
+export function looksLikeAuthError(text: string): boolean {
+  return typeof text === "string" && AUTH_HINT_RE.test(text);
+}
+
 /** ANSI escape sequence (colors), stripped before URL extraction (ESC + "[...m"). */
 const ANSI = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g");
 
@@ -104,6 +134,19 @@ export function assertSafeArg(arg: unknown): string {
 export function isVercelInstalled(exec: ExecFn = execSync): boolean {
   try {
     exec("vercel --version", { stdio: "pipe", encoding: "utf8" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Return true if `vercel whoami` succeeds (i.e. the user has a valid session).
+ * A single, non-interactive probe — never a login attempt and never a poll.
+ */
+export function isVercelAuthenticated(exec: ExecFn = execSync): boolean {
+  try {
+    exec("vercel whoami", { stdio: "pipe", encoding: "utf8" });
     return true;
   } catch {
     return false;
@@ -142,10 +185,11 @@ export function extractDeploymentUrl(output: string): string | null {
 /**
  * Deploy the current project to Vercel production and return the URL.
  *
- * @throws {UnsafeArgumentError}        if an extra arg is unsafe (checked first).
- * @throws {VercelCliNotFoundError}     if the CLI is not installed.
- * @throws {DeploymentFailedError}      if the deploy command exits non-zero.
- * @throws {DeploymentUrlNotFoundError} if no URL is found in the output.
+ * @throws {UnsafeArgumentError}          if an extra arg is unsafe (checked first).
+ * @throws {VercelCliNotFoundError}       if the CLI is not installed.
+ * @throws {VercelNotAuthenticatedError}  if the failure looks like a missing login.
+ * @throws {DeploymentFailedError}        if the deploy command exits non-zero.
+ * @throws {DeploymentUrlNotFoundError}   if no URL is found in the output.
  */
 export function deployWithVercel(options: DeployOptions = {}): DeployResult {
   const exec = options.exec ?? (execSync as ExecFn);
@@ -153,12 +197,19 @@ export function deployWithVercel(options: DeployOptions = {}): DeployResult {
   // 1) Validate any caller-supplied args BEFORE building the command (fail fast).
   const extra = (options.extraArgs ?? []).map(assertSafeArg);
 
-  // 2) Ensure the CLI exists.
+  // 2) Guard the working directory. A missing cwd otherwise surfaces as a
+  //    confusing ENOENT (on Windows, against the shell) — the same class of bug
+  //    that bit the sandbox spawn. Fail with a clear, actionable message instead.
+  if (options.cwd !== undefined && !existsSync(options.cwd)) {
+    throw new Error(`Le dossier à déployer n'existe pas : ${options.cwd}`);
+  }
+
+  // 3) Ensure the CLI exists.
   if (!isVercelInstalled(exec)) {
     throw new VercelCliNotFoundError();
   }
 
-  // 3) Build a command from a fixed base plus only validated tokens.
+  // 4) Build a command from a fixed base plus only validated tokens.
   const command = ["vercel", "--yes", "--prod", ...extra].join(" ");
 
   let output: string;
@@ -168,11 +219,21 @@ export function deployWithVercel(options: DeployOptions = {}): DeployResult {
       stdio: "pipe",
       cwd: options.cwd,
       env: options.env,
+      // A production deploy can print a lot; keep well clear of execSync's 1 MB
+      // default so a chatty build never trips ENOBUFS and masks the real result.
+      maxBuffer: 32 * 1024 * 1024,
     });
     output = decode(result);
   } catch (err) {
     const e = err as { stdout?: unknown; stderr?: unknown };
-    throw new DeploymentFailedError(decode(e.stdout), decode(e.stderr));
+    const stdout = decode(e.stdout);
+    const stderr = decode(e.stderr);
+    // A non-zero exit that reads like "you are not logged in" is an auth problem,
+    // not a build failure — surface the exact next step (`vercel login`).
+    if (looksLikeAuthError(`${stdout}\n${stderr}`)) {
+      throw new VercelNotAuthenticatedError();
+    }
+    throw new DeploymentFailedError(stdout, stderr);
   }
 
   const url = extractDeploymentUrl(output);

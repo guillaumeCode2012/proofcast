@@ -1,14 +1,19 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import {
   DeploymentFailedError,
   DeploymentUrlNotFoundError,
   UnsafeArgumentError,
   VercelCliNotFoundError,
+  VercelNotAuthenticatedError,
   assertSafeArg,
   deployWithVercel,
   extractDeploymentUrl,
+  isVercelAuthenticated,
+  looksLikeAuthError,
 } from "../dist/deployer.js";
 
 /** Real ANSI escape character. */
@@ -108,6 +113,48 @@ test("deployWithVercel surfaces build failures with captured output", () => {
 test("deployWithVercel throws DeploymentUrlNotFoundError when no URL is present", () => {
   const exec = mockExec({ deploy: "Building...\nDone, but no URL was printed.\n" });
   assert.throws(() => deployWithVercel({ exec }), DeploymentUrlNotFoundError);
+});
+
+test("deployWithVercel classifies a missing login as VercelNotAuthenticatedError (not a build failure)", () => {
+  const exec = mockExec({
+    deploy: () => {
+      const err = new Error("Command failed: vercel --yes --prod");
+      err.status = 1;
+      err.stdout = "";
+      err.stderr = "Error: No existing credentials found. Please run `vercel login`.\n";
+      throw err;
+    },
+  });
+  assert.throws(
+    () => deployWithVercel({ exec }),
+    (err) => err instanceof VercelNotAuthenticatedError && /vercel login/i.test(err.message),
+  );
+});
+
+test("deployWithVercel refuses a non-existent cwd before touching the shell", () => {
+  const exec = mockExec({ deploy: "Production: https://x.vercel.app" });
+  const missing = join(tmpdir(), `proofcast-nope-${Math.random().toString(36).slice(2)}`);
+  assert.throws(() => deployWithVercel({ exec, cwd: missing }), /n'existe pas/);
+  assert.equal(exec.commands.length, 0, "must validate the cwd before running any command");
+});
+
+test("isVercelAuthenticated reflects `vercel whoami`", () => {
+  const loggedIn = (command) => {
+    if (command.includes("whoami")) return "guillaume\n";
+    throw new Error(`unexpected command: ${command}`);
+  };
+  assert.equal(isVercelAuthenticated(loggedIn), true);
+
+  const loggedOut = () => {
+    throw new Error("Error: Please log in with `vercel login`.");
+  };
+  assert.equal(isVercelAuthenticated(loggedOut), false);
+});
+
+test("looksLikeAuthError distinguishes a login problem from a build failure", () => {
+  assert.ok(looksLikeAuthError("Error: No existing credentials found. Please run `vercel login`"));
+  assert.ok(looksLikeAuthError("You are not currently logged in."));
+  assert.ok(!looksLikeAuthError("Error: build failed: missing build script"));
 });
 
 test("assertSafeArg rejects injection attempts and accepts safe args", () => {

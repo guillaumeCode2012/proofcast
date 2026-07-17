@@ -27,6 +27,7 @@ import type { Browser, BrowserContext } from "playwright";
 import type Docker from "dockerode";
 
 import { startSandbox, stopSandbox } from "./sandbox.js";
+import { safeHashSourceDir } from "./source-hash.js";
 import {
   runDemoActions,
   smartDemo,
@@ -67,6 +68,12 @@ export interface ProofReport {
   success: boolean;
   /** The recorded proof video (MP4). Present only when `success === true`. */
   video?: Buffer;
+  /**
+   * Deterministic hash of the proven source ({@link hashSourceDir}). Present on
+   * success (best-effort — omitted if hashing fails). This is what binds a proof to
+   * the exact code it proves so the deploy gate can refuse a changed codebase.
+   */
+  sourceHash?: string;
   /** Typed failures. Present (non-empty) only when `success === false`. */
   errors?: ProofError[];
   /** Wall-clock duration of the whole prove, in milliseconds. */
@@ -184,7 +191,12 @@ export async function proveCode(dirPath: string, options: ProveCodeOptions = {})
 
     const result = await runChecks(`http://localhost:${port}`);
     if (result.errors.length === 0) {
-      return { success: true, video: result.video, durationMs: Date.now() - start };
+      // Bind the proof to the exact source it just proved (best-effort — a hashing
+      // hiccup must never turn a clean proof into a failure; the deploy gate then
+      // fails closed on a missing hash). Excludes deps/build output/proof artifacts,
+      // so `npm install` / the build during the prove don't shift the hash.
+      const sourceHash = await safeHashSourceDir(dirPath);
+      return { success: true, video: result.video, sourceHash, durationMs: Date.now() - start };
     }
     return failReport(classifyBrowserErrors(result.errors), start);
   } catch (err) {

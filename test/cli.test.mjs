@@ -1,13 +1,16 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { resolve } from "node:path";
 
 import {
   proofcastRun,
   proofcastGenerate,
+  proofcastDeploy,
   runCli,
   applyApiKeyFromConfig,
   PROOF_FILENAME,
 } from "../dist/cli.js";
+import { VercelNotAuthenticatedError } from "../dist/deployer.js";
 
 /**
  * Build a capturing harness: records stdout/stderr lines, tracks whether the AI
@@ -17,7 +20,7 @@ import {
 function harness(overrides = {}) {
   const out = [];
   const err = [];
-  const calls = { proveCode: 0, executeAndHeal: [], writeProof: [], loadConfig: 0 };
+  const calls = { proveCode: 0, executeAndHeal: [], writeProof: [], writeProofManifest: [], loadConfig: 0 };
 
   const deps = {
     loadConfig: async () => {
@@ -27,14 +30,17 @@ function harness(overrides = {}) {
     proveCode: async (dirPath) => {
       calls.proveCode++;
       calls.lastProveDir = dirPath;
-      return overrides.report ?? { success: true, video: Buffer.from("MP4-PROOF"), durationMs: 7 };
+      return overrides.report ?? { success: true, video: Buffer.from("MP4-PROOF"), sourceHash: "HASH-run", durationMs: 7 };
     },
     executeAndHeal: async (description, dirPath, maxRetries) => {
       calls.executeAndHeal.push({ description, dirPath, maxRetries });
-      return overrides.heal ?? { success: true, video: Buffer.from("MP4-HEAL"), attempts: 2 };
+      return overrides.heal ?? { success: true, video: Buffer.from("MP4-HEAL"), sourceHash: "HASH-heal", attempts: 2 };
     },
     writeProof: async (proofPath, video) => {
       calls.writeProof.push({ proofPath, video });
+    },
+    writeProofManifest: async (dir, proofFilename, input) => {
+      calls.writeProofManifest.push({ dir, proofFilename, input });
     },
     // An ISOLATED env so tests never mutate the real process.env.
     env: overrides.env ?? {},
@@ -71,6 +77,8 @@ test("run: proves, prints JSON, exit 0", async () => {
   assert.ok(json.proofPath.endsWith(PROOF_FILENAME), "reports where the proof video was written");
   assert.equal(h.calls.writeProof.length, 1, "the proof video was written to disk");
   assert.equal(h.calls.writeProof[0].video.toString(), "MP4-PROOF");
+  assert.equal(h.calls.writeProofManifest.length, 1, "a manifest binding the proof to the code is written");
+  assert.equal(h.calls.writeProofManifest[0].input.sourceHash, "HASH-run", "the manifest carries the proven-code hash");
 });
 
 test("run: a failed proof yields exit 1 and the typed errors on stdout (no AI call)", async () => {
@@ -134,7 +142,7 @@ test("run: an unexpected prover throw becomes structured JSON, not a crash", asy
 test("generate: runs the full generate→heal loop and reports attempts + proofPath", async () => {
   const h = harness({
     config: { apiKey: "sk-live" },
-    heal: { success: true, video: Buffer.from("MP4-HEAL"), attempts: 2 },
+    heal: { success: true, video: Buffer.from("MP4-HEAL"), sourceHash: "HASH-heal", attempts: 2 },
   });
   const code = await proofcastGenerate(["add a reset button", "/target"], h.deps);
 
@@ -151,6 +159,7 @@ test("generate: runs the full generate→heal loop and reports attempts + proofP
   assert.equal(json.attempts, 2, "reports how many repair attempts happened");
   assert.ok(json.proofPath.endsWith(PROOF_FILENAME));
   assert.equal(h.calls.writeProof.length, 1);
+  assert.equal(h.calls.writeProofManifest[0].input.sourceHash, "HASH-heal", "the manifest binds the healed code");
 });
 
 test("generate: a configured Anthropic-shaped apiKey is exposed as ANTHROPIC_API_KEY", async () => {
@@ -218,6 +227,103 @@ test("generate: a missing description is a usage error (exit 1), no config load,
   assert.match(stdoutJson(h.out).error, /Usage/);
 });
 
+// ── proofcast deploy ─────────────────────────────────────────────────────────
+
+/**
+ * A capturing harness for the deploy command: the gate signal (`verifyProof`), the
+ * directory probe (`dirExists`), and the real deploy (`deployWithVercel`) are all
+ * fakes — nothing touches Vercel, the network, or the filesystem. By default the
+ * proof is `verified` (bound to the current code).
+ */
+function deployHarness(overrides = {}) {
+  const out = [];
+  const err = [];
+  const calls = { deploy: 0, deployOptions: undefined };
+
+  const deps = {
+    dirExists: overrides.dirExists ?? (async () => true),
+    verifyProof: overrides.verifyProof ?? (async () => ({ status: "verified", sourceHash: "H" })),
+    deployWithVercel:
+      overrides.deployWithVercel ??
+      ((options) => {
+        calls.deploy++;
+        calls.deployOptions = options;
+        return { url: "https://proj-acme.vercel.app", rawOutput: "Production: https://proj-acme.vercel.app" };
+      }),
+    stdout: (line) => out.push(line),
+    stderr: (line) => err.push(line),
+    now: () => 1000,
+  };
+  return { deps, out, err, calls };
+}
+
+test("deploy: REFUSED when no proof exists for the dir — never touches Vercel (exit 1)", async () => {
+  const h = deployHarness({ verifyProof: async () => ({ status: "missing" }) });
+  const code = await proofcastDeploy(["/target"], h.deps);
+
+  assert.equal(code, 1, "the gate blocks with a failure exit code");
+  assert.equal(h.calls.deploy, 0, "deploy must be vetoed BEFORE any Vercel call");
+  const json = stdoutJson(h.out);
+  assert.equal(json.success, false);
+  assert.equal(json.deploymentUrl, undefined, "no URL when blocked");
+  assert.match(json.error, /aucune preuve/i, "explains a proof is required");
+  assert.match(json.error, /override/i, "states there is no override");
+});
+
+test("deploy: REFUSED when the code changed since the proof — the bound-hash gate (exit 1)", async () => {
+  const h = deployHarness({
+    verifyProof: async () => ({ status: "stale", provenHash: "OLD", currentHash: "NEW" }),
+  });
+  const code = await proofcastDeploy(["/target"], h.deps);
+
+  assert.equal(code, 1);
+  assert.equal(h.calls.deploy, 0, "a changed codebase must NOT deploy");
+  const json = stdoutJson(h.out);
+  assert.equal(json.success, false);
+  assert.match(json.error, /code a changé/i, "the message says the code changed since the last proof");
+  assert.match(json.error, /reprouver|run <dir>|proofcast run/i, "tells the user to re-prove");
+  assert.match(json.error, /override/i);
+});
+
+test("deploy: with a proof bound to the current code, runs the REAL deploy and prints deploymentUrl (exit 0)", async () => {
+  const h = deployHarness({ verifyProof: async () => ({ status: "verified", sourceHash: "H" }) });
+  const code = await proofcastDeploy(["/target"], h.deps);
+
+  assert.equal(code, 0);
+  assert.equal(h.calls.deploy, 1, "the real deploy ran exactly once");
+  assert.equal(
+    h.calls.deployOptions.cwd,
+    resolve("/target"),
+    "deploys from the resolved target dir (a valid cwd — the INSTALL_FAILED precaution)",
+  );
+  const json = stdoutJson(h.out);
+  assert.equal(json.success, true);
+  assert.equal(json.deploymentUrl, "https://proj-acme.vercel.app", "the production URL is on stdout");
+});
+
+test("deploy: a non-existent dir is a precise 'not found', not a misleading gate block", async () => {
+  const h = deployHarness({ dirExists: async () => false });
+  const code = await proofcastDeploy(["/nope"], h.deps);
+
+  assert.equal(code, 1);
+  assert.equal(h.calls.deploy, 0);
+  assert.match(stdoutJson(h.out).error, /introuvable/i);
+});
+
+test("deploy: an unauthenticated Vercel surfaces the login instruction, never a login attempt (exit 1)", async () => {
+  const h = deployHarness({
+    deployWithVercel: () => {
+      throw new VercelNotAuthenticatedError();
+    },
+  });
+  const code = await proofcastDeploy(["/target"], h.deps);
+
+  assert.equal(code, 1);
+  const json = stdoutJson(h.out);
+  assert.equal(json.success, false);
+  assert.match(json.error, /vercel login/i, "tells the user exactly what to do");
+});
+
 // ── router ───────────────────────────────────────────────────────────────────
 
 test("runCli routes 'run' and 'generate'", async () => {
@@ -228,6 +334,12 @@ test("runCli routes 'run' and 'generate'", async () => {
   const h2 = harness({ config: { apiKey: "sk-live" } });
   assert.equal(await runCli(["generate", "x", "/target"], h2.deps), 0);
   assert.equal(h2.calls.executeAndHeal.length, 1);
+});
+
+test("runCli routes 'deploy'", async () => {
+  const h = deployHarness();
+  assert.equal(await runCli(["deploy", "/target"], h.deps), 0);
+  assert.equal(h.calls.deploy, 1);
 });
 
 test("runCli: unknown command → exit 1 with valid JSON; help → exit 0", async () => {

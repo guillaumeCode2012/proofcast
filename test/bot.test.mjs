@@ -44,6 +44,7 @@ function mockDeps({
   resolveThrows,
   demoPlan,
   demoPlanThrows = false,
+  hashSource,
 } = {}) {
   const calls = {
     generateFeature: 0,
@@ -55,11 +56,16 @@ function mockDeps({
     executeAndHeal: null,
     lastDescription: null,
     lastDemoPlanArgs: null,
+    hashSourceDirs: [],
     logs: [],
     memoryWrites: [],
   };
   return {
     calls,
+    async hashSource(dir) {
+      calls.hashSourceDirs.push(dir);
+      return hashSource ? hashSource(dir) : "HASH";
+    },
     async generateFeature(description) {
       calls.generateFeature++;
       calls.lastDescription = description;
@@ -313,6 +319,37 @@ test("'Démo <folder> | …' runs brownfield self-heal in the Docker sandbox and
   assert.equal(ctx.videos.length, 1, "sends the healed proof video");
   assert.equal(ctx.videos[0].video.source.toString(), "HEAL-MP4");
   assert.equal(state.demoReady, true);
+});
+
+test("brownfield: proof binds to the code — 'Déploie' after an unchanged dir deploys", async () => {
+  const state = createChatState();
+  const deps = mockDeps({ hashSource: async () => "HASH-STABLE" });
+
+  await runDemoCommand(mockCtx("Démo /path/to/app | ajoute un bouton"), state, deps);
+  assert.equal(state.demoReady, true);
+  assert.equal(state.provenDir, "/resolved/project", "records the proven directory");
+  assert.equal(state.provenSourceHash, "HASH-STABLE", "records the proven code's hash");
+
+  const deployCtx = mockCtx("Déploie");
+  await runDeployCommand(deployCtx, state, deps); // hash still HASH-STABLE → allowed
+  assert.equal(deps.calls.deployWithVercel, 1, "unchanged code deploys");
+  assert.match(deployCtx.replies.join("\n"), /vercel\.app/);
+});
+
+test("brownfield: 'Déploie' is REFUSED when the code changed since the proof (no override)", async () => {
+  const state = createChatState();
+  let currentHash = "H1";
+  const deps = mockDeps({ hashSource: async () => currentHash });
+
+  await runDemoCommand(mockCtx("Démo /path/to/app | ajoute un bouton"), state, deps);
+  assert.equal(state.provenSourceHash, "H1");
+
+  currentHash = "H2"; // the user edits a source file after proving
+  const deployCtx = mockCtx("Déploie");
+  await runDeployCommand(deployCtx, state, deps);
+
+  assert.equal(deps.calls.deployWithVercel, 0, "a changed codebase must NOT deploy");
+  assert.match(deployCtx.replies.join("\n"), /code a changé/i, "explains the code changed since the proof");
 });
 
 test("'Démo <folder> | …' with no Docker warns, offers an install button, and falls back to local", async () => {

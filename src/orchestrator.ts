@@ -51,6 +51,8 @@ export interface HealResult {
   success: boolean;
   /** Number of generate → prove attempts actually performed. */
   attempts: number;
+  /** Deterministic hash of the proven source on success (binds the proof to the code). */
+  sourceHash?: string;
   /** The last error observed when `success` is false. */
   lastError?: string;
 }
@@ -141,7 +143,12 @@ export async function executeAndHeal(
         // Delegate the whole boot/test/report + teardown to the prover.
         const report = await deps.proveCode(dirPath);
         if (report.success) {
-          return { video: report.video ?? Buffer.alloc(0), success: true, attempts };
+          return {
+            video: report.video ?? Buffer.alloc(0),
+            success: true,
+            attempts,
+            sourceHash: report.sourceHash,
+          };
         }
         attemptError = serializeProofErrors(report.errors);
       } catch (err) {

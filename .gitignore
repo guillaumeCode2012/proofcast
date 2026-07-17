@@ -3,6 +3,7 @@ node_modules/
 
 # Build output
 dist/
+*.tsbuildinfo
 
 # npm packaging artifact (created by `npm pack`)
 *.tgz
@@ -20,8 +21,13 @@ proofcast-live.md
 *.webm
 *.mp4
 demos/
+# …but the landing page's own demo videos are real site content — keep them tracked.
+!landing/public/*.mp4
 # Shareable proof folders emitted by `--share`
 proof-*/
+# Proof manifest sidecars written next to a proof video (bind proof ↔ code)
+proofcast-proof.json
+proofcast-demo-proof.json
 playwright-report/
 test-results/
 
