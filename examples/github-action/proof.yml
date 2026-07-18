@@ -34,7 +34,8 @@ jobs:
           path: .
 
           # ── everything below is optional; these are the defaults ──
-          # version: latest          # or pin: 0.5.0
+          # version: bundled         # the ProofCast shipped with the action (no npm
+          #                          # release needed). Or pin one: latest / 0.5.0
           # execution: local         # or `docker` for container isolation
           # artifact-name: proofcast-proof
           # retention-days: "30"

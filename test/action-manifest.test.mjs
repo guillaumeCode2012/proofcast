@@ -69,7 +69,7 @@ test("the three PR-facing deliverables are each wired into the manifest", () => 
   assert.match(report.run, /dist\/action\.js/, "the reporter is the tested glue, not inline shell");
 
   // The proof itself must be recorded, and must not abort the job before reporting.
-  assert.match(script, /proofcast run/);
+  assert.match(script, /dist\/cli\.js\\" run/);
 });
 
 test("user input never reaches a shell script through `${{ }}` interpolation", () => {
@@ -84,14 +84,32 @@ test("user input never reaches a shell script through `${{ }}` interpolation", (
   }
 });
 
-test("the install step refuses a ProofCast too old to carry the action glue", () => {
+test("the action is SELF-CONTAINED by default — no npm release required", () => {
+  // The whole point: `uses: owner/proofcast@v1` must work for a stranger the moment
+  // the tag exists. Defaulting to an npm spec would make the action depend on a
+  // separate release that can lag it, be yanked, or resolve older than the action.
+  assert.equal(ACTION.inputs.version.default, "bundled");
   const install = ACTION.runs.steps.find((s) => s.id === "install");
-  // `version: latest` resolves to whatever is on npm, which can predate this action.
-  // Without the preflight, that surfaces later as a missing file or a silent no-op.
-  assert.match(install.run, /dist\/action\.js/, "must verify the glue is actually present");
-  assert.match(install.run, /command -v proofcast/, "must verify the CLI landed on PATH");
+  assert.match(install.run, /GITHUB_ACTION_PATH/, "the bundled path must use the action's own checkout");
+  assert.match(install.run, /npm ci/, "…and install its dependencies from the committed lockfile");
+});
+
+test("the install step refuses a pinned release too old to carry the action glue", () => {
+  const install = ACTION.runs.steps.find((s) => s.id === "install");
+  // Reachable only via an explicit `version:`, but a pinned release CAN predate the
+  // action; without the preflight that surfaces as a missing file or a silent no-op.
+  assert.match(install.run, /dist\/cli\.js/);
+  assert.match(install.run, /dist\/action\.js/);
   assert.match(install.run, /::error::/, "a mismatch must be a loud annotated failure");
   assert.match(install.run, /exit 1/);
+});
+
+test("the CLI is invoked by path, never through the `proofcast` bin", () => {
+  const prove = ACTION.runs.steps.find((s) => s.id === "prove");
+  // One code path for both install modes, and no dependency on PATH or on npm's bin
+  // shim — the shim is exactly what silently no-opped on Linux before v0.5.0.
+  assert.match(prove.run, /node "\$PROOFCAST_ROOT\/dist\/cli\.js" run/);
+  assert.doesNotMatch(prove.run, /^\s*proofcast run/m);
 });
 
 test("the reporting step runs even when the proof failed", () => {
@@ -126,13 +144,19 @@ test("the copy-paste example workflow is what a stranger can actually use", () =
 });
 
 test("this repo dogfoods the action from the branch under review", () => {
-  const step = Object.values(DOGFOOD.jobs)
-    .flatMap((job) => job.steps)
-    .find((s) => s.uses === "./");
+  const steps = Object.values(DOGFOOD.jobs).flatMap((job) => job.steps);
+  const step = steps.find((s) => s.uses === "./");
   assert.ok(step, "proof.yml must run the local action, so a broken PR reddens its own check");
-  assert.match(String(step.with.version), /github\.workspace/, "and must install ProofCast from this checkout");
   assert.equal(DOGFOOD.permissions["pull-requests"], "write");
   assert.equal(DOGFOOD.permissions.statuses, "write");
+
+  // The dogfood run must exercise the SAME path an outside repo takes. Any build or
+  // install scaffolding here would mean this repo proves something users never run.
+  assert.ok(!step.with?.version, "no version override — the bundled default is what strangers get");
+  assert.ok(
+    !steps.some((s) => String(s.run ?? "").includes("npm ci")),
+    "no pre-build step: the action installs its own dependencies, and so must this run",
+  );
 });
 
 test("PROOFCAST_VERSION tracks package.json — it is stamped into every PR comment", async () => {
