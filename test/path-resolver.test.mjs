@@ -1,8 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { join, relative } from "node:path";
 import { tmpdir } from "node:os";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { resolve } from "node:path";
 
@@ -10,6 +11,7 @@ import {
   DirectoryNotFoundError,
   FALLBACK_DIRNAME,
   extractFolderName,
+  isProcessEntryPoint,
   resolveAnyDirectory,
   resolveTargetDirectory,
   sanitizeFolderName,
@@ -159,4 +161,68 @@ test("resolveAnyDirectory falls back to the safe project search for a bare name"
 test("resolveAnyDirectory returns null for an empty hint (greenfield)", async () => {
   assert.equal(await resolveAnyDirectory(""), null);
   assert.equal(await resolveAnyDirectory("   "), null);
+});
+
+// ── the binary entry-point guard ────────────────────────────────────────────
+
+/**
+ * Regression cover for a bug that made `proofcast` a SILENT NO-OP on every
+ * Linux/macOS global install: `npm i -g` exposes the CLI as a symlink in `bin/`,
+ * so `process.argv[1]` is the link while `import.meta.url` is the real file Node
+ * loaded. Comparing them un-normalised is always false — `main()` never ran, the
+ * process printed nothing and exited 0. Windows hid it (npm writes a .cmd shim
+ * that names the real path), which is why it survived so long.
+ */
+test("isProcessEntryPoint matches the module actually being executed", () => {
+  const original = process.argv[1];
+  const realFile = fileURLToPath(new URL("../dist/path-resolver.js", import.meta.url));
+  try {
+    process.argv[1] = realFile;
+    assert.equal(isProcessEntryPoint(pathToFileURL(realFile).href), true);
+
+    process.argv[1] = join(realFile, "..", "..", "dist", "path-resolver.js");
+    assert.equal(isProcessEntryPoint(pathToFileURL(realFile).href), true, "a non-normalised path still matches");
+
+    process.argv[1] = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
+    assert.equal(isProcessEntryPoint(pathToFileURL(realFile).href), false, "a different module is not the entry point");
+  } finally {
+    process.argv[1] = original;
+  }
+});
+
+test("isProcessEntryPoint resolves a bin SYMLINK to its target", (t) => {
+  const original = process.argv[1];
+  const realFile = fileURLToPath(new URL("../dist/path-resolver.js", import.meta.url));
+  const dir = mkdtempSync(join(tmpdir(), "proofcast-bin-"));
+  const link = join(dir, "proofcast");
+  try {
+    try {
+      symlinkSync(realFile, link, "file");
+    } catch {
+      // Creating symlinks needs Developer Mode / elevation on Windows.
+      t.skip("symlinks unavailable on this machine");
+      return;
+    }
+    process.argv[1] = link;
+    assert.equal(
+      isProcessEntryPoint(pathToFileURL(realFile).href),
+      true,
+      "invoked through a bin symlink, the CLI must still recognise itself and run main()",
+    );
+  } finally {
+    process.argv[1] = original;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("isProcessEntryPoint is false when there is no entry path at all", () => {
+  const original = process.argv[1];
+  try {
+    process.argv[1] = undefined;
+    assert.equal(isProcessEntryPoint("file:///anything.js"), false);
+    process.argv[1] = join(tmpdir(), "proofcast-does-not-exist", "nope.js");
+    assert.equal(isProcessEntryPoint("file:///anything.js"), false, "a missing argv[1] must not throw");
+  } finally {
+    process.argv[1] = original;
+  }
 });

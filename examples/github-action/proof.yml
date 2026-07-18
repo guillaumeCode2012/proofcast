@@ -1,0 +1,43 @@
+# Prove the feature on every pull request, and put the proof in the PR.
+#
+# Copy this file to `.github/workflows/proof.yml` in your repository and change ONE
+# thing: `path`, so it points at the app you want proven. That app only needs to boot
+# with `npm install && npm run build && npm run start`.
+#
+# On every PR you then get:
+#   - a comment carrying the report (feature, status, duration) + a link to the video,
+#   - the recorded MP4 as a downloadable workflow artifact,
+#   - a `proofcast/proof` check that goes RED when the feature does not actually work.
+#
+# No secret is required: recording a proof makes no AI call, and the built-in
+# `GITHUB_TOKEN` is enough to comment and to set the check.
+
+name: Proof
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: write # post the proof comment
+  statuses: write # publish the proofcast/proof check
+
+jobs:
+  proof:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: guillaumeCode2012/proofcast@v1
+        with:
+          # The project to prove. Use "." if your app lives at the repo root.
+          path: .
+
+          # ── everything below is optional; these are the defaults ──
+          # version: latest          # or pin: 0.5.0
+          # execution: local         # or `docker` for container isolation
+          # artifact-name: proofcast-proof
+          # retention-days: "30"
+          # comment: "true"          # set "false" to skip the PR comment
+          # status-check: "true"     # set "false" to skip the proofcast/proof check
+          # fail-on-error: "true"    # set "false" to report without failing the job

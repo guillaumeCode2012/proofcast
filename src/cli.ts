@@ -32,6 +32,13 @@
  * openable via file:// or any static host, no CDN); `--open` opens it in the
  * default browser (implies `--share`). On `--share`, stdout gains a `sharePath`.
  *
+ * Execution mode (`run` / `generate`): by default ProofCast sandboxes the proven
+ * project in Docker when a daemon is available and falls back to local execution
+ * otherwise. `--local` and `--docker` pin that choice explicitly — `--local` is
+ * what CI uses (a GitHub runner HAS a Docker daemon, so the default would pick
+ * Docker and then need `node:20-alpine` pulled first), and `--docker` makes the
+ * stronger isolation a hard requirement instead of a lucky default.
+ *
  * Output contract (so agents can script on it reliably):
  *   - stdout carries EXACTLY ONE line of JSON (a {@link CliOutput}), always valid —
  *     never a raw stack trace, even on an unexpected failure.
@@ -43,7 +50,9 @@ import { cp, mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { basename, join, relative, resolve } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
+
+import { isProcessEntryPoint } from "./path-resolver.js";
 
 import { loadConfig as defaultLoadConfig, type ProofCastConfig } from "./config.js";
 import {
@@ -100,10 +109,16 @@ export interface CliOutput {
 /** Injectable side-effects. Defaults are the real implementations; tests pass fakes. */
 export interface CliDependencies {
   loadConfig: (options?: { projectRoot?: string }) => Promise<ProofCastConfig>;
-  proveCode: (dirPath: string) => Promise<ProofReport>;
+  /** Prove existing code. `execution` is the mode resolved from `--local` / `--docker`. */
+  proveCode: (dirPath: string, execution?: ExecutionMode) => Promise<ProofReport>;
   /** Prove the bundled demo project. Defaults to LOCAL execution — no Docker, so the demo is truly zero-setup. */
   proveDemo: (dirPath: string) => Promise<ProofReport>;
-  executeAndHeal: (description: string, dirPath: string, maxRetries: number) => Promise<HealResult>;
+  executeAndHeal: (
+    description: string,
+    dirPath: string,
+    maxRetries: number,
+    execution?: ExecutionMode,
+  ) => Promise<HealResult>;
   /** Real Vercel production deploy (injectable so tests never touch the network). */
   deployWithVercel: (options?: DeployOptions) => DeployResult;
   /** Verify a proof for `dir` is bound to its CURRENT source (the deploy gate's signal). */
@@ -130,7 +145,7 @@ function withDefaults(overrides: Partial<CliDependencies> = {}): CliDependencies
     loadConfig: overrides.loadConfig ?? defaultLoadConfig,
     proveCode:
       overrides.proveCode ??
-      ((dirPath) => defaultProveCode(dirPath, { execution: isDockerAvailable() ? "docker" : "local" })),
+      ((dirPath, execution) => defaultProveCode(dirPath, { execution: resolveExecution(execution) })),
     // Force LOCAL: the demo must run from any empty folder without Docker. The
     // bundled example is our own trusted, zero-dependency code, so running it on
     // the host is safe. Use a FREE port (not the fixed 3000): the example honours
@@ -141,9 +156,9 @@ function withDefaults(overrides: Partial<CliDependencies> = {}): CliDependencies
       (async (dirPath) => defaultProveCode(dirPath, { execution: "local", port: await freePort() })),
     executeAndHeal:
       overrides.executeAndHeal ??
-      ((description, dirPath, maxRetries) =>
+      ((description, dirPath, maxRetries, execution) =>
         defaultExecuteAndHeal(description, dirPath, maxRetries, {
-          execution: isDockerAvailable() ? "docker" : "local",
+          execution: resolveExecution(execution),
         })),
     deployWithVercel: overrides.deployWithVercel ?? ((options) => defaultDeployWithVercel(options)),
     verifyProof: overrides.verifyProof ?? ((dir) => defaultVerifyProofArtifact(dir)),
@@ -161,27 +176,41 @@ function withDefaults(overrides: Partial<CliDependencies> = {}): CliDependencies
   };
 }
 
+/** How the proven project is booted. `undefined` = auto-detect (Docker if a daemon is up). */
+export type ExecutionMode = "docker" | "local";
+
 /** Flags common to every command, split out from the positional arguments. */
 interface CliFlags {
   /** `--share`: also emit a self-contained, shareable `proof-<id>/` folder. */
   share: boolean;
   /** `--open`: open the shareable page in the default browser (implies `--share`). */
   open: boolean;
+  /** `--local` / `--docker`: pin the execution mode. Absent = auto-detect. */
+  execution?: ExecutionMode;
 }
 
-/** Split `--share` / `--open` out of `argv`, leaving the positional arguments untouched. */
+/** Split the flags out of `argv`, leaving the positional arguments untouched. */
 function parseCliArgs(argv: string[]): { positionals: string[]; flags: CliFlags } {
   const positionals: string[] = [];
   let share = false;
   let open = false;
+  let execution: ExecutionMode | undefined;
   for (const arg of argv) {
     if (arg === "--share") share = true;
     else if (arg === "--open") open = true;
+    // Last one wins, so `--docker --local` resolves rather than erroring.
+    else if (arg === "--local") execution = "local";
+    else if (arg === "--docker") execution = "docker";
     else positionals.push(arg);
   }
   // You cannot open a page that was never produced — `--open` implies `--share`.
   if (open) share = true;
-  return { positionals, flags: { share, open } };
+  return { positionals, flags: { share, open, execution } };
+}
+
+/** Resolve the execution mode: an explicit flag wins, otherwise auto-detect Docker. */
+function resolveExecution(flag: ExecutionMode | undefined): ExecutionMode {
+  return flag ?? (isDockerAvailable() ? "docker" : "local");
 }
 
 /** Metadata for a shareable proof folder, once a run has passed. */
@@ -259,7 +288,7 @@ export async function proofcastRun(
 
   let report: ProofReport;
   try {
-    report = await deps.proveCode(dirPath);
+    report = await deps.proveCode(dirPath, flags.execution);
   } catch (err) {
     // proveCode is designed to return (not throw) for prove failures; a throw here
     // is unexpected — surface it as structured JSON, never a raw stack on stdout.
@@ -299,7 +328,10 @@ export async function proofcastGenerate(
 
   const description = positionals[0];
   if (typeof description !== "string" || description.trim().length === 0) {
-    return usageFailure(deps, 'Usage : proofcast generate "<description>" [dirPath] [--share] [--open]');
+    return usageFailure(
+      deps,
+      'Usage : proofcast generate "<description>" [dirPath] [--share] [--open] [--local|--docker]',
+    );
   }
   const dirPath = resolve(positionals[1] ?? process.cwd());
 
@@ -318,7 +350,7 @@ export async function proofcastGenerate(
   const start = deps.now();
   let result: HealResult;
   try {
-    result = await deps.executeAndHeal(description, dirPath, DEFAULT_MAX_RETRIES);
+    result = await deps.executeAndHeal(description, dirPath, DEFAULT_MAX_RETRIES, flags.execution);
   } catch (err) {
     deps.stderr(`Échec inattendu : ${messageOf(err)}`);
     emit(deps, { success: false, error: messageOf(err), attempts: 0, durationMs: deps.now() - start });
@@ -573,8 +605,8 @@ function usageOutput(): CliOutput & { commands: string[] } {
     success: true,
     durationMs: 0,
     commands: [
-      "proofcast run [dirPath] [--share] [--open]",
-      'proofcast generate "<description>" [dirPath] [--share] [--open]',
+      "proofcast run [dirPath] [--share] [--open] [--local|--docker]",
+      'proofcast generate "<description>" [dirPath] [--share] [--open] [--local|--docker]',
       "proofcast demo [outDir] [--share] [--open]",
       "proofcast deploy [dirPath]",
     ],
@@ -648,6 +680,6 @@ export function applyApiKeyFromConfig(
 }
 
 // Run only when invoked directly as a binary (never on a library import / test).
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+if (isProcessEntryPoint(import.meta.url)) {
   void main(process.argv.slice(2));
 }
