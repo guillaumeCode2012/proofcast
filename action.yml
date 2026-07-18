@@ -87,6 +87,24 @@ runs:
 
         ROOT="$(npm root -g)/proofcast"
         echo "root=$ROOT" >> "$GITHUB_OUTPUT"
+        INSTALLED="$(node -pe "require('$ROOT/package.json').version" 2>/dev/null || echo unknown)"
+        echo "Installed ProofCast $INSTALLED"
+
+        # Preflight. The action is younger than some published ProofCast versions, and
+        # `version: latest` silently resolves to whatever is on npm — so state the
+        # mismatch here, loudly, instead of letting it surface three steps later as a
+        # missing file or a proof that never ran.
+        if ! command -v proofcast >/dev/null 2>&1; then
+          echo "::error::ProofCast $INSTALLED installed but the \`proofcast\` binary is not on PATH."
+          exit 1
+        fi
+        if [ ! -f "$ROOT/dist/action.js" ]; then
+          echo "::error::ProofCast $INSTALLED does not ship the GitHub Action glue (dist/action.js); \
+        it is required to comment on the PR and publish the check. Use a release >= 0.5.0 — \
+        set the action's \`version:\` input, or leave it at \`latest\` once 0.5.0 is on npm."
+          exit 1
+        fi
+
         # Resolve from inside the package so this works whether npm hoisted
         # playwright to the global root or nested it under proofcast/. `cli.js` is
         # NOT in playwright's "exports" map, so anchor on package.json — which is —
