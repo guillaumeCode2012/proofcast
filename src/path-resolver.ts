@@ -12,9 +12,35 @@
  * Performance: heavy/noisy directories are excluded from the recursive scan.
  */
 
-import { mkdirSync, readdirSync, statSync } from "node:fs";
+import { mkdirSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
+
+/**
+ * True when the module identified by `moduleUrl` is the process entry point —
+ * the guard every `dist/*.js` binary uses to run `main()` only when executed
+ * directly, never on a library import or from a test.
+ *
+ * The realpath() is the whole point. `process.argv[1]` is the path AS INVOKED,
+ * while `import.meta.url` is always the path Node actually LOADED — and Node
+ * resolves symlinks while loading. On a global install those differ twice over:
+ * `npm i -g` puts a symlink in `bin/` (so argv[1] is `…/bin/proofcast`, not
+ * `…/dist/cli.js`), and the global prefix itself often sits behind a symlinked
+ * ancestor. Comparing the two without normalising made the guard false on every
+ * Linux/macOS global install: `main()` never ran, nothing was printed, and the
+ * process exited 0 — a CLI that silently did nothing at all.
+ */
+export function isProcessEntryPoint(moduleUrl: string): boolean {
+  const entry = process.argv[1];
+  if (!entry) return false;
+  try {
+    return moduleUrl === pathToFileURL(realpathSync(resolve(entry))).href;
+  } catch {
+    // A non-existent argv[1] (or an unreadable link) simply is not this module.
+    return false;
+  }
+}
 
 /** Thrown if a resolved path would escape the project root (defense-in-depth). */
 export class PathEscapeError extends Error {

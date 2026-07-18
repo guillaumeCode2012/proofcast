@@ -50,7 +50,9 @@ import { cp, mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { basename, join, relative, resolve } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
+
+import { isProcessEntryPoint } from "./path-resolver.js";
 
 import { loadConfig as defaultLoadConfig, type ProofCastConfig } from "./config.js";
 import {
@@ -678,6 +680,6 @@ export function applyApiKeyFromConfig(
 }
 
 // Run only when invoked directly as a binary (never on a library import / test).
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+if (isProcessEntryPoint(import.meta.url)) {
   void main(process.argv.slice(2));
 }

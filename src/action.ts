@@ -24,10 +24,9 @@
  */
 
 import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
-import { pathToFileURL } from "node:url";
 
 import { runCommand, type CommandResult, type CommandRunner } from "./github.js";
+import { isProcessEntryPoint } from "./path-resolver.js";
 import type { ProofError } from "./prover.js";
 
 /**
@@ -487,7 +486,7 @@ function messageOf(err: unknown): string {
 }
 
 // Run only when invoked directly as a binary (never on a library import / test).
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+if (isProcessEntryPoint(import.meta.url)) {
   void actionMain().then((code) => {
     process.exitCode = code;
   });
