@@ -29,6 +29,22 @@ test("action.yml is a valid composite action with Marketplace-required metadata"
   assert.ok(ACTION.description.length > 20, "needs a real description to be listed");
   assert.ok(ACTION.branding?.icon && ACTION.branding?.color, "branding is required to publish");
   assert.ok(ACTION.runs.steps.length > 0);
+
+  // The name must be unique across every listed action — bare "ProofCast" is taken,
+  // and a listing attempt with a duplicate is rejected at publish time, in the web UI,
+  // long after CI went green.
+  assert.notEqual(ACTION.name, "ProofCast", "bare 'ProofCast' is already taken on the Marketplace");
+});
+
+test("renaming for the Marketplace never changes how the action is referenced", () => {
+  // `name:` is the catalogue's display name; the repository decides `uses:`. Nothing
+  // users copy may be derived from it, or a rename silently breaks every workflow.
+  const referenced = usesOf(EXAMPLE).find((u) => u.includes("proofcast"));
+  assert.equal(referenced, "guillaumeCode2012/proofcast@v1");
+  assert.ok(
+    !referenced.includes(ACTION.name),
+    "the documented `uses:` must not be built from the display name",
+  );
 });
 
 test("every input is documented and every documented default is real", () => {

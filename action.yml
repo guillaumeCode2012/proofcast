@@ -1,4 +1,7 @@
-name: "ProofCast"
+# The Marketplace requires a name unique across EVERY listed action, and plain
+# "ProofCast" is taken. This is the catalogue's display name only — the action is
+# still used as `guillaumeCode2012/proofcast@v1`, which the repo name decides.
+name: "ProofCast — Proof in your PR"
 description: "Prove your feature actually works in a real browser, and put the video proof in the pull request."
 author: "Guillaume Prévot"
 
