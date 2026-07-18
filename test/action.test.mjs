@@ -115,6 +115,10 @@ test("a passing proof comments the report + a link to the playable video", () =>
   assert.match(body, /\| \*\*Duration\*\* \| 4\.9 s \|/);
   assert.match(body, /\[⬇️ proofcast-proof\]\(https:\/\/github\.com\/o\/r\/actions\/runs\/1\/artifacts\/9\)/);
   assert.match(body, /ProofCast\]\(https:\/\/github\.com\/guillaumeCode2012\/proofcast\) v0\.5\.0/);
+  // GitHub cannot preview an artifact inline, so the comment must say what to open —
+  // otherwise the reader downloads a zip and guesses.
+  assert.match(body, /proofcast-proof\.mp4/);
+  assert.match(body, /index\.html/);
 });
 
 test("a passing proof without a successful upload still names the artifact", () => {
@@ -186,6 +190,35 @@ test("resolveContext puts the status on the PR HEAD sha, not the merge commit", 
   assert.equal(context.prNumber, 12);
   assert.equal(context.sha, "headsha", "a status on the merge sha would show no check on the PR");
   assert.equal(context.runUrl, "https://github.com/o/r/actions/runs/77");
+});
+
+test("resolveContext detects a fork, by flag or by differing repo names", async () => {
+  const byFlag = await resolveContext(
+    { GITHUB_REPOSITORY: "o/r", GITHUB_EVENT_PATH: "/e" },
+    async () =>
+      JSON.stringify({
+        pull_request: { number: 5, head: { sha: "s", repo: { full_name: "someone/r", fork: true } }, base: { repo: { full_name: "o/r" } } },
+      }),
+  );
+  assert.equal(byFlag.isFork, true);
+
+  const byName = await resolveContext(
+    { GITHUB_REPOSITORY: "o/r", GITHUB_EVENT_PATH: "/e" },
+    async () =>
+      JSON.stringify({
+        pull_request: { number: 5, head: { sha: "s", repo: { full_name: "someone/r" } }, base: { repo: { full_name: "o/r" } } },
+      }),
+  );
+  assert.equal(byName.isFork, true, "a differing head repo is a fork even without the flag");
+
+  const sameRepo = await resolveContext(
+    { GITHUB_REPOSITORY: "o/r", GITHUB_EVENT_PATH: "/e" },
+    async () =>
+      JSON.stringify({
+        pull_request: { number: 5, head: { sha: "s", repo: { full_name: "o/r", fork: false } }, base: { repo: { full_name: "o/r" } } },
+      }),
+  );
+  assert.equal(sameRepo.isFork, false, "a branch PR in the same repo is not a fork");
 });
 
 test("resolveContext degrades gracefully off a pull request", async () => {
@@ -264,6 +297,36 @@ test("a failing proof sets the status to failure — the red check on the PR", a
   assert.ok(status.args.includes("state=failure"));
 });
 
+test("a fork PR is diagnosed as a fork, NOT as a missing permission", async () => {
+  // GitHub hands `pull_request` runs from a fork a read-only token, so the 403 is by
+  // design. Telling the user to add `pull-requests: write` would send them to edit a
+  // workflow that is already correct — the single worst piece of advice available.
+  const ex = fakeExec({
+    "--jq": { stdout: "" },
+    "POST repos/o/r/issues/12/comments": { exitCode: 1, stderr: "HTTP 403: Resource not accessible by integration" },
+    "statuses/": { exitCode: 1, stderr: "HTTP 403" },
+  });
+  const c = collector();
+
+  const result = await reportProof(
+    {
+      report: PASSING,
+      feature: "app",
+      context: { ...PR_CONTEXT, isFork: true },
+      comment: true,
+      status: true,
+    },
+    { exec: ex.run, env: {}, ...c.deps },
+  );
+
+  assert.deepEqual(result, { comment: "skipped", status: "skipped", success: true });
+  const logs = c.logs.join("\n");
+  assert.match(logs, /::warning::/, "must surface as an annotation, not a buried log line");
+  assert.match(logs, /FORK/i);
+  assert.match(logs, /read-only token/i);
+  assert.doesNotMatch(logs, /Add `pull-requests: write`/, "must not blame the user's permissions block");
+});
+
 test("reporting NEVER changes the verdict: a GitHub failure is logged, not thrown", async () => {
   const ex = fakeExec({
     "--jq": { stdout: "" },
@@ -278,8 +341,11 @@ test("reporting NEVER changes the verdict: a GitHub failure is logged, not throw
   );
 
   assert.deepEqual(result, { comment: "skipped", status: "skipped", success: true });
-  assert.match(c.logs.join("\n"), /pull-requests: write/, "tells the user the exact missing permission");
-  assert.match(c.logs.join("\n"), /statuses: write/);
+  const logs = c.logs.join("\n");
+  assert.match(logs, /::warning::/, "surfaces in the run + checks UI, not only in the log");
+  assert.match(logs, /pull-requests: write/, "tells the user the exact missing permission");
+  assert.match(logs, /statuses: write/);
+  assert.doesNotMatch(logs, /fork/i, "a same-repo PR must not be misdiagnosed as a fork");
 });
 
 test("a `gh` that is missing entirely is survived too", async () => {

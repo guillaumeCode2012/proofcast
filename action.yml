@@ -66,6 +66,19 @@ outputs:
 runs:
   using: "composite"
   steps:
+    # Chromium is ~130 MB and identical between runs, so downloading it every time is
+    # the single biggest slice of the job. Key on the resolved ProofCast ref: the
+    # browser build is pinned by the Playwright that ships with it, so a new ProofCast
+    # gets a fresh cache automatically and a stale browser can never be reused.
+    - name: Restore the Chromium cache
+      id: browser-cache
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/ms-playwright
+        key: proofcast-chromium-${{ runner.os }}-${{ inputs.version }}-${{ hashFiles(format('{0}/package-lock.json', github.action_path)) }}
+        restore-keys: |
+          proofcast-chromium-${{ runner.os }}-${{ inputs.version }}-
+
     # ProofCast bundles its own ffmpeg (ffmpeg-static), so only the browser and its
     # system libraries are missing from a bare runner. Chromium is installed through
     # the Playwright that ships INSIDE the resolved ProofCast, so the browser build

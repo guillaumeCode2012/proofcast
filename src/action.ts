@@ -139,8 +139,16 @@ export function formatProofComment(input: ProofCommentInput): string {
 
   if (passed) {
     lines.push(
-      "🎬 **This feature was driven in a real browser and recorded.** Download the artifact " +
-        "and watch it work — evidence you can play, not a checkmark you trust.",
+      "🎬 **This feature was driven in a real browser and recorded.** Evidence you can play, " +
+        "not a checkmark you trust.",
+    );
+    lines.push("");
+    // Say what is in the zip. GitHub cannot preview an artifact inline, so without
+    // this the reader downloads a file and guesses what to open.
+    lines.push(
+      "> Download the artifact and open **`proofcast-proof.mp4`** — or open " +
+        "**`proof-…/index.html`**, a self-contained page that plays the video next to the " +
+        "report, with no server and no CDN.",
     );
   } else {
     lines.push("This pull request has **no valid proof**. The prover reported:");
@@ -204,11 +212,22 @@ export interface ActionContext {
    */
   sha?: string;
   runUrl?: string;
+  /**
+   * True when the PR comes from a fork. GitHub hands `pull_request` runs from a
+   * fork a READ-ONLY token, so commenting and setting the status are refused with
+   * 403 no matter what the workflow's `permissions:` block says. Knowing this lets
+   * the reporter explain the real cause instead of blaming the user's config.
+   */
+  isFork?: boolean;
 }
 
 /** The GitHub event payload fields this module reads (everything else is ignored). */
 interface EventPayload {
-  pull_request?: { number?: number; head?: { sha?: string } };
+  pull_request?: {
+    number?: number;
+    head?: { sha?: string; repo?: { full_name?: string; fork?: boolean } };
+    base?: { repo?: { full_name?: string } };
+  };
 }
 
 /**
@@ -233,12 +252,25 @@ export async function resolveContext(
     }
   }
 
-  const prNumber = payload.pull_request?.number;
+  const pr = payload.pull_request;
+  const prNumber = pr?.number;
+  // `fork` is authoritative when present; comparing repo names also catches a PR
+  // opened from a fork whose flag the payload happens to omit.
+  const headRepo = pr?.head?.repo;
+  const isFork =
+    headRepo === undefined
+      ? undefined
+      : headRepo.fork === true ||
+        (Boolean(headRepo.full_name) &&
+          Boolean(pr?.base?.repo?.full_name) &&
+          headRepo.full_name !== pr?.base?.repo?.full_name);
+
   return {
     repository,
     prNumber: typeof prNumber === "number" ? prNumber : undefined,
-    sha: payload.pull_request?.head?.sha ?? env.GITHUB_SHA,
+    sha: pr?.head?.sha ?? env.GITHUB_SHA,
     runUrl,
+    isFork,
   };
 }
 
@@ -291,7 +323,7 @@ export async function reportProof(
 
   let comment: ReportResult["comment"] = "skipped";
   if (input.comment && context.prNumber && context.repository) {
-    comment = await upsertComment(deps, context.repository, context.prNumber, body);
+    comment = await upsertComment(deps, context, context.prNumber, body);
   } else if (input.comment) {
     deps.log("ProofCast: no pull-request context — skipping the PR comment.");
   }
@@ -313,10 +345,11 @@ export async function reportProof(
  */
 async function upsertComment(
   deps: ReportDependencies,
-  repository: string,
+  context: ActionContext,
   prNumber: number,
   body: string,
 ): Promise<"created" | "updated" | "skipped"> {
+  const repository = context.repository;
   const existingId = await findExistingComment(deps, repository, prNumber);
 
   const call = existingId
@@ -325,15 +358,43 @@ async function upsertComment(
 
   const res = await call;
   if (res.exitCode !== 0) {
-    deps.log(
-      `ProofCast: could not ${existingId ? "update" : "post"} the PR comment ` +
-        `(${(res.stderr || res.stdout).trim().slice(0, 300)}). ` +
-        "The job's `permissions:` block needs `pull-requests: write`.",
-    );
+    warnPublishFailure(deps, context, `${existingId ? "update" : "post"} the PR comment`, "pull-requests: write", res);
     return "skipped";
   }
   deps.log(`ProofCast: proof comment ${existingId ? "updated" : "posted"} on PR #${prNumber}.`);
   return existingId ? "updated" : "created";
+}
+
+/**
+ * Explain a failed publish as a GitHub ANNOTATION, diagnosed correctly.
+ *
+ * Two very different causes produce the same 403, and telling them apart is the
+ * whole value here. On a PR from a fork the token is read-only by design, and no
+ * `permissions:` block can change that — sending the user to edit their workflow
+ * would be a wild goose chase. Everywhere else, a missing scope really is the
+ * cause. `::warning::` (not a log line) so it surfaces on the run and in the PR's
+ * checks UI, where someone wondering "why is there no comment?" will actually look.
+ */
+function warnPublishFailure(
+  deps: ReportDependencies,
+  context: ActionContext,
+  action: string,
+  scope: string,
+  res: CommandResult,
+): void {
+  const detail = (res.stderr || res.stdout).trim().slice(0, 300);
+  if (context.isFork) {
+    deps.log(
+      `::warning::ProofCast proved this pull request, but could not ${action}: it comes from a FORK, ` +
+        "and GitHub gives `pull_request` runs from forks a read-only token. This is not a misconfiguration — " +
+        "no `permissions:` block can grant it. The proof itself ran and is in this job's summary and artifact.",
+    );
+    return;
+  }
+  deps.log(
+    `::warning::ProofCast could not ${action} (${detail}). ` +
+      `Add \`${scope}\` to the job's \`permissions:\` block.`,
+  );
 }
 
 /** Find this action's own comment id on the PR, or `null`. Never throws. */
@@ -376,10 +437,7 @@ async function setCommitStatus(
 
   const res = await gh(deps, args);
   if (res.exitCode !== 0) {
-    deps.log(
-      `ProofCast: could not set the commit status (${(res.stderr || res.stdout).trim().slice(0, 300)}). ` +
-        "The job's `permissions:` block needs `statuses: write`.",
-    );
+    warnPublishFailure(deps, context, "publish the proof check", "statuses: write", res);
     return "skipped";
   }
   deps.log(`ProofCast: commit status \`${PROOF_STATUS_CONTEXT}\` = ${report.success ? "success" : "failure"}.`);
