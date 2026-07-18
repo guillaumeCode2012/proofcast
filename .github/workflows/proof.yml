@@ -21,6 +21,12 @@ permissions:
   pull-requests: write # post the proof comment
   statuses: write # publish the proofcast/proof check
 
+# Two quick pushes would otherwise race, and the slower run could overwrite the
+# newer proof comment with a stale one. Keep only the latest per branch.
+concurrency:
+  group: proof-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   proof:
     runs-on: ubuntu-latest

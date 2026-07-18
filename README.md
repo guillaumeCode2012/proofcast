@@ -148,6 +148,13 @@ Every pull request then gets three things:
 
 Outputs: `success`, `duration-ms`, `proof-path`, `artifact-url`.
 
+**Pull requests from forks.** GitHub gives `pull_request` runs from a fork a
+read-only token, so the comment and the check cannot be published — by design, and no
+`permissions:` block changes it. ProofCast still *proves* the PR: the video artifact
+and the job summary are there, and the action says so in a warning rather than
+failing silently. (The usual workaround, `pull_request_target`, runs untrusted code
+with a write token — don't reach for it without understanding that trade-off.)
+
 The action needs a standard `ubuntu-latest` runner and installs Chromium itself;
 ffmpeg ships bundled with ProofCast. A ready-to-copy workflow lives in
 [examples/github-action/proof.yml](examples/github-action/proof.yml), and this repo
