@@ -15,7 +15,7 @@
 
 [![Contribute](https://img.shields.io/badge/Contribute-FFDD00?style=for-the-badge&logo=buymeacoffee&logoColor=black)](https://www.buymeacoffee.com/guillaume_code) &nbsp; [![Follow on X](https://img.shields.io/badge/Follow_@GuillaumeP86859-black?style=for-the-badge&logo=x&logoColor=white)](https://x.com/GuillaumeP86859)
 
-[Quickstart](#quickstart-a-real-proof-in-2-minutes) · [The problem](#the-problem) · [The solution](#the-solution) · [How it works](#how-it-works) · [Architecture](#architecture) · [Installation](#installation) · [Status](#current-status)
+[Quickstart](#quickstart-a-real-proof-in-2-minutes) · [CI](#add-proof-to-your-ci) · [The problem](#the-problem) · [The solution](#the-solution) · [How it works](#how-it-works) · [Architecture](#architecture) · [Installation](#installation) · [Status](#current-status)
 
 <br/>
 
@@ -86,6 +86,75 @@ feature, pass/fail, duration, timestamp — with no backend and no CDN, so it wo
 by opening the file directly (`file://`) **and** on any static host. Its path comes
 back on stdout as `sharePath`. Add **`--open`** to pop it straight into your
 default browser.
+
+---
+
+## Add proof to your CI
+
+Reviewers approve diffs. They almost never *run* the thing. The **ProofCast GitHub
+Action** closes that gap: on every pull request it boots your app, drives the feature
+in real Chromium, records it, and puts the result **in the PR itself**.
+
+Drop this in `.github/workflows/proof.yml`:
+
+```yaml
+name: Proof
+
+on: pull_request
+
+permissions:
+  contents: read
+  pull-requests: write # post the proof comment
+  statuses: write # publish the proofcast/proof check
+
+jobs:
+  proof:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: guillaumeCode2012/proofcast@v1
+        with:
+          path: . # the app to prove
+```
+
+That is the whole setup. **No secret to configure** — recording a proof makes no AI
+call, and the built-in `GITHUB_TOKEN` is enough to comment and set the check. Your
+app only needs to boot with `npm install && npm run build && npm run start`.
+
+Every pull request then gets three things:
+
+| | |
+| :-- | :-- |
+| 💬 **A comment** | The report — feature, ✅/❌, duration — with a link to the video. Re-runs **edit** that comment instead of stacking new ones. |
+| 🎥 **An artifact** | The recorded **MP4**, plus the self-contained shareable page, downloadable from the run. |
+| ✅ **A check** | `proofcast/proof`, green or red from the report. Make it a required check and *"it works"* stops being a claim. |
+
+<details>
+<summary><b>All inputs</b> (every one is optional)</summary>
+
+| Input | Default | What it does |
+| :-- | :-- | :-- |
+| `path` | `.` | Directory of the app to prove. |
+| `version` | `latest` | ProofCast version to install. Accepts any npm spec, including a git ref. |
+| `execution` | `local` | `local`, or `docker` for container isolation (pulls `node:20-alpine`). |
+| `artifact-name` | `proofcast-proof` | Name of the artifact holding the video. |
+| `retention-days` | `30` | How long the proof is kept. |
+| `comment` | `true` | Post/update the PR comment. |
+| `status-check` | `true` | Publish the `proofcast/proof` commit status. |
+| `fail-on-error` | `true` | Fail the job on a failed proof. `false` reports without blocking. |
+| `github-token` | `${{ github.token }}` | Token used to comment and set the check. |
+
+Outputs: `success`, `duration-ms`, `proof-path`, `artifact-url`.
+
+The action needs a standard `ubuntu-latest` runner and installs Chromium itself;
+ffmpeg ships bundled with ProofCast. A ready-to-copy workflow lives in
+[examples/github-action/proof.yml](examples/github-action/proof.yml), and this repo
+[proves itself with it](.github/workflows/proof.yml) on every PR.
+
+Releasing the action is documented in
+[docs/publishing-the-action.md](docs/publishing-the-action.md).
+
+</details>
 
 ---
 

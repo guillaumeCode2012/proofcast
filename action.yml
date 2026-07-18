@@ -1,0 +1,172 @@
+name: "ProofCast"
+description: "Prove your feature actually works in a real browser, and put the video proof in the pull request."
+author: "Guillaume Prévot"
+
+branding:
+  icon: "play-circle"
+  color: "purple"
+
+inputs:
+  path:
+    description: "Directory of the project to prove (must be bootable with `npm start`)."
+    required: false
+    default: "."
+  version:
+    description: >-
+      Which ProofCast to install: an npm version (`latest`, `0.5.0`) or any full npm
+      spec, including a git ref like `github:guillaumeCode2012/proofcast#main`.
+    required: false
+    default: "latest"
+  execution:
+    description: >-
+      How the proven project is booted: `local` (default — fast, no image pull) or
+      `docker` (stronger isolation; the action pulls node:20-alpine first).
+    required: false
+    default: "local"
+  artifact-name:
+    description: "Name of the workflow artifact holding the proof video."
+    required: false
+    default: "proofcast-proof"
+  retention-days:
+    description: "How long to keep the proof artifact."
+    required: false
+    default: "30"
+  comment:
+    description: "Post (and keep updated) the proof report as a pull-request comment."
+    required: false
+    default: "true"
+  status-check:
+    description: "Publish the pass/fail `proofcast/proof` commit status on the PR head."
+    required: false
+    default: "true"
+  fail-on-error:
+    description: "Fail the job when the proof does not pass. Set to `false` to report only."
+    required: false
+    default: "true"
+  github-token:
+    description: "Token used to comment and set the status. The default `GITHUB_TOKEN` is enough."
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  success:
+    description: "`true` when the proof passed."
+    value: ${{ steps.report.outputs.success }}
+  duration-ms:
+    description: "Wall-clock duration of the proof, in milliseconds."
+    value: ${{ steps.report.outputs.duration-ms }}
+  proof-path:
+    description: "Path of the recorded MP4 on the runner."
+    value: ${{ steps.report.outputs.proof-path }}
+  artifact-url:
+    description: "Download URL of the uploaded proof artifact."
+    value: ${{ steps.upload.outputs.artifact-url }}
+
+runs:
+  using: "composite"
+  steps:
+    # ProofCast bundles its own ffmpeg (ffmpeg-static), so only the browser and its
+    # system libraries are missing from a bare runner. Chromium is installed through
+    # the Playwright that ships INSIDE the resolved ProofCast, so the browser build
+    # always matches the driver that will record the proof.
+    - name: Install ProofCast
+      id: install
+      shell: bash
+      env:
+        PROOFCAST_SPEC: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        # A plain version ("latest", "0.5.0") is scoped to the package name; anything
+        # containing ':' or '/' is already a full npm spec (git ref, tarball URL, path).
+        case "$PROOFCAST_SPEC" in
+          *:*|*/*) SPEC="$PROOFCAST_SPEC" ;;
+          *)       SPEC="proofcast@$PROOFCAST_SPEC" ;;
+        esac
+        echo "Installing $SPEC"
+        npm install -g "$SPEC"
+
+        ROOT="$(npm root -g)/proofcast"
+        echo "root=$ROOT" >> "$GITHUB_OUTPUT"
+        # Resolve from inside the package so this works whether npm hoisted
+        # playwright to the global root or nested it under proofcast/.
+        PW_CLI="$(node -e "console.log(require.resolve('playwright/cli.js',{paths:[process.argv[1]]}))" "$ROOT")"
+        node "$PW_CLI" install --with-deps chromium
+
+    - name: Pull the sandbox image
+      if: inputs.execution == 'docker'
+      shell: bash
+      run: docker pull node:20-alpine
+
+    # The proof must not abort the job here: a FAILING proof is a result we still want
+    # to comment and to turn into a red check, not a bare step crash. `run` exits
+    # non-zero on a failed proof, so the failure is absorbed and the captured JSON —
+    # which the reporter reads — becomes the single source of the verdict.
+    #
+    # Inputs travel through `env:` rather than being interpolated into the script:
+    # a `${{ }}` expansion inside `run:` is a shell-injection surface.
+    - name: Prove the feature
+      id: prove
+      shell: bash
+      env:
+        PROOFCAST_PATH: ${{ inputs.path }}
+        PROOFCAST_EXECUTION_FLAG: ${{ inputs.execution == 'docker' && '--docker' || '--local' }}
+      run: |
+        set -uo pipefail
+        REPORT_FILE="${RUNNER_TEMP}/proofcast-report.json"
+        proofcast run "$PROOFCAST_PATH" "$PROOFCAST_EXECUTION_FLAG" --share | tee "$REPORT_FILE" || true
+        echo "report-file=$REPORT_FILE" >> "$GITHUB_OUTPUT"
+
+    # Stage the video + the self-contained shareable page so the artifact is
+    # something a reviewer can just open, not a loose file.
+    - name: Stage the proof artifact
+      id: stage
+      shell: bash
+      env:
+        PROOFCAST_PATH: ${{ inputs.path }}
+      run: |
+        set -euo pipefail
+        STAGE="${RUNNER_TEMP}/proofcast-artifact"
+        mkdir -p "$STAGE"
+        # `run` writes proofcast-proof.mp4 into the proven directory; `--share`
+        # additionally writes a portable proof-<id>/ folder next to it.
+        find "$PROOFCAST_PATH" -maxdepth 1 -name 'proofcast-*.mp4' -exec cp {} "$STAGE/" \; || true
+        find "$PROOFCAST_PATH" -maxdepth 1 -type d -name 'proof-*' -exec cp -r {} "$STAGE/" \; || true
+        if [ -z "$(ls -A "$STAGE")" ]; then
+          echo "has-artifact=false" >> "$GITHUB_OUTPUT"
+          echo "ProofCast: no proof video was produced (the proof did not pass)."
+        else
+          echo "has-artifact=true" >> "$GITHUB_OUTPUT"
+        fi
+        echo "dir=$STAGE" >> "$GITHUB_OUTPUT"
+
+    - name: Upload the proof video
+      id: upload
+      if: steps.stage.outputs.has-artifact == 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: ${{ steps.stage.outputs.dir }}
+        retention-days: ${{ inputs.retention-days }}
+        if-no-files-found: ignore
+
+    # Comment + status check + job summary, then the verdict as this step's exit
+    # code. `npm root -g` resolves the glue from the ProofCast version installed
+    # above, so the reporter can never drift from the prover that produced it.
+    - name: Report the proof on the pull request
+      id: report
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        PROOFCAST_REPORT_FILE: ${{ steps.prove.outputs.report-file }}
+        PROOFCAST_FEATURE: ${{ inputs.path == '.' && github.event.repository.name || inputs.path }}
+        PROOFCAST_ARTIFACT_URL: ${{ steps.upload.outputs.artifact-url }}
+        PROOFCAST_ARTIFACT_NAME: ${{ inputs.artifact-name }}
+        PROOFCAST_COMMENT: ${{ inputs.comment }}
+        PROOFCAST_STATUS: ${{ inputs.status-check }}
+        PROOFCAST_FAIL_ON_ERROR: ${{ inputs.fail-on-error }}
+      run: |
+        set -euo pipefail
+        ROOT="${{ steps.install.outputs.root }}"
+        PROOFCAST_VERSION="$(node -pe "require('$ROOT/package.json').version" 2>/dev/null || echo '')"
+        export PROOFCAST_VERSION
+        node "$ROOT/dist/action.js"

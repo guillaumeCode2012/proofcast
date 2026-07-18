@@ -15,7 +15,7 @@
  *   - bot        (src/bot.ts)        — Telegram control surface (Démo / Déploie)
  */
 
-export const PROOFCAST_VERSION = "0.4.0";
+export const PROOFCAST_VERSION = "0.5.0";
 
 export * from "./onboarding.js";
 export * from "./config.js";
@@ -37,6 +37,7 @@ export * from "./agent.js";
 export * from "./planner.js";
 export * from "./skills.js";
 export * from "./github.js";
+export * from "./action.js";
 export * from "./gate.js";
 export * from "./webhook.js";
 export * from "./daemon.js";
