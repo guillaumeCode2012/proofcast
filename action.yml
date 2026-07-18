@@ -88,9 +88,11 @@ runs:
         ROOT="$(npm root -g)/proofcast"
         echo "root=$ROOT" >> "$GITHUB_OUTPUT"
         # Resolve from inside the package so this works whether npm hoisted
-        # playwright to the global root or nested it under proofcast/.
-        PW_CLI="$(node -e "console.log(require.resolve('playwright/cli.js',{paths:[process.argv[1]]}))" "$ROOT")"
-        node "$PW_CLI" install --with-deps chromium
+        # playwright to the global root or nested it under proofcast/. `cli.js` is
+        # NOT in playwright's "exports" map, so anchor on package.json — which is —
+        # and walk to the package root from there.
+        PW_DIR="$(node -e "console.log(require('path').dirname(require.resolve('playwright/package.json',{paths:[process.argv[1]]})))" "$ROOT")"
+        node "$PW_DIR/cli.js" install --with-deps chromium
 
     - name: Pull the sandbox image
       if: inputs.execution == 'docker'
