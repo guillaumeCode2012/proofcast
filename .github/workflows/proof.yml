@@ -1,12 +1,12 @@
 # ProofCast proving ProofCast — this repo's own proof gate on every pull request.
 #
-# It runs the action FROM THE BRANCH UNDER REVIEW (`uses: ./`, and `version:` set to
-# this checkout), so a PR that breaks the action turns its own check red. That is the
-# point of the product, applied to the product.
+# It runs the action FROM THE BRANCH UNDER REVIEW (`uses: ./`), so a PR that breaks
+# the action turns its own check red. That is the point of the product, applied to
+# the product.
 #
-# ⚠️ This is NOT the file to copy. If you want proof on your own PRs, copy
-# `examples/github-action/proof.yml` — it is the same workflow with the two lines
-# below swapped for `uses: guillaumeCode2012/proofcast@v1`.
+# Because the action is self-contained (it runs the ProofCast bundled at its own
+# ref), this is byte-for-byte what an outside repo does — only the `uses:` line
+# differs. Copy `examples/github-action/proof.yml` instead of this file.
 
 name: Proof
 
@@ -27,18 +27,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Dogfooding only. Installing ProofCast from this checkout re-runs `prepare`
-      # (tsc) in the workspace, which needs the devDependencies to be present —
-      # consumers install from npm, which ships a prebuilt dist/ and skips `prepare`.
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-      - run: npm ci
-
       - uses: ./
         with:
           path: examples/checkout
-          # Install ProofCast from THIS checkout instead of npm, so the proof is
-          # produced by the code in the PR rather than by the last release.
-          version: ${{ github.workspace }}

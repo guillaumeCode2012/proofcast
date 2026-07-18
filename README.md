@@ -118,8 +118,10 @@ jobs:
 ```
 
 That is the whole setup. **No secret to configure** — recording a proof makes no AI
-call, and the built-in `GITHUB_TOKEN` is enough to comment and set the check. Your
-app only needs to boot with `npm install && npm run build && npm run start`.
+call, and the built-in `GITHUB_TOKEN` is enough to comment and set the check. **No
+install step either:** the action is self-contained, running the ProofCast bundled at
+the ref you pinned, so `@v1` can never drift from the tool it ships. Your app only
+needs to boot with `npm install && npm run build && npm run start`.
 
 Every pull request then gets three things:
 
@@ -135,7 +137,7 @@ Every pull request then gets three things:
 | Input | Default | What it does |
 | :-- | :-- | :-- |
 | `path` | `.` | Directory of the app to prove. |
-| `version` | `latest` | ProofCast version to install. Accepts any npm spec, including a git ref. |
+| `version` | `bundled` | Run the ProofCast shipped with the action at the ref you pinned — self-contained, always version-matched. Or pin a release (`latest`, `0.5.0`, any npm spec). |
 | `execution` | `local` | `local`, or `docker` for container isolation (pulls `node:20-alpine`). |
 | `artifact-name` | `proofcast-proof` | Name of the artifact holding the video. |
 | `retention-days` | `30` | How long the proof is kept. |
