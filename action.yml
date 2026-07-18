@@ -66,18 +66,32 @@ outputs:
 runs:
   using: "composite"
   steps:
-    # Chromium is ~130 MB and identical between runs, so downloading it every time is
-    # the single biggest slice of the job. Key on the resolved ProofCast ref: the
-    # browser build is pinned by the Playwright that ships with it, so a new ProofCast
-    # gets a fresh cache automatically and a stale browser can never be reused.
+    # The cache key must name the Playwright version, because that is what decides
+    # which Chromium build gets downloaded — caching by anything looser risks serving
+    # a browser the driver refuses. `hashFiles()` cannot help here: it only resolves
+    # paths inside GITHUB_WORKSPACE, and a remote action lives outside it. So read the
+    # version out of the action's own lockfile directly.
+    - name: Resolve the browser cache key
+      id: cache-key
+      shell: bash
+      run: |
+        set -euo pipefail
+        PW="$(node -pe "
+          const lock = require('$GITHUB_ACTION_PATH/package-lock.json');
+          const p = lock.packages?.['node_modules/playwright'] ?? lock.dependencies?.playwright;
+          p?.version ?? 'unknown';
+        " 2>/dev/null || echo unknown)"
+        echo "playwright=$PW" >> "$GITHUB_OUTPUT"
+        echo "Playwright $PW → Chromium cache key"
+
+    # Chromium is ~130 MB and identical between runs — downloading it every time was
+    # the single biggest slice of the job.
     - name: Restore the Chromium cache
       id: browser-cache
       uses: actions/cache@v4
       with:
         path: ~/.cache/ms-playwright
-        key: proofcast-chromium-${{ runner.os }}-${{ inputs.version }}-${{ hashFiles(format('{0}/package-lock.json', github.action_path)) }}
-        restore-keys: |
-          proofcast-chromium-${{ runner.os }}-${{ inputs.version }}-
+        key: proofcast-chromium-${{ runner.os }}-pw${{ steps.cache-key.outputs.playwright }}
 
     # ProofCast bundles its own ffmpeg (ffmpeg-static), so only the browser and its
     # system libraries are missing from a bare runner. Chromium is installed through

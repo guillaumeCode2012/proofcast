@@ -125,9 +125,17 @@ test("Chromium is cached across runs — it is the biggest slice of the job", ()
   const cache = ACTION.runs.steps.find((s) => String(s.uses ?? "").startsWith("actions/cache"));
   assert.ok(cache, "a ~130 MB browser download on every run is the main source of latency");
   assert.match(String(cache.with.path), /ms-playwright/);
-  // Keyed on the resolved ProofCast, so a new version can never reuse a stale browser.
-  assert.match(String(cache.with.key), /inputs\.version/);
-  assert.match(String(cache.with.key), /hashFiles/);
+
+  // The key must name the Playwright version — it decides which Chromium build is
+  // required, so a looser key risks serving a browser the driver refuses.
+  assert.match(String(cache.with.key), /steps\.cache-key\.outputs\.playwright/);
+  const keyStep = ACTION.runs.steps.find((s) => s.id === "cache-key");
+  assert.ok(keyStep, "the key has to be computed in a step…");
+  assert.doesNotMatch(
+    String(cache.with.key),
+    /hashFiles/,
+    "…because hashFiles() only resolves inside GITHUB_WORKSPACE, and a remote action lives outside it",
+  );
 });
 
 test("both workflows cancel superseded runs, so a stale proof cannot win the race", () => {
