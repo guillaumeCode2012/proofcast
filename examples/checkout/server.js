@@ -111,6 +111,8 @@ const PAGE = `<!doctype html>
   </main>
   <script>
     (function () {
+      // DELIBERATE BREAKAGE — demonstrating that the proof gate goes red.
+      window.totalPrice.toFixed(2);
       var form = document.getElementById('checkout');
       var pay = document.getElementById('pay');
       var btn = document.getElementById('paybtn');
