@@ -84,6 +84,16 @@ test("user input never reaches a shell script through `${{ }}` interpolation", (
   }
 });
 
+test("the install step refuses a ProofCast too old to carry the action glue", () => {
+  const install = ACTION.runs.steps.find((s) => s.id === "install");
+  // `version: latest` resolves to whatever is on npm, which can predate this action.
+  // Without the preflight, that surfaces later as a missing file or a silent no-op.
+  assert.match(install.run, /dist\/action\.js/, "must verify the glue is actually present");
+  assert.match(install.run, /command -v proofcast/, "must verify the CLI landed on PATH");
+  assert.match(install.run, /::error::/, "a mismatch must be a loud annotated failure");
+  assert.match(install.run, /exit 1/);
+});
+
 test("the reporting step runs even when the proof failed", () => {
   const prove = ACTION.runs.steps.find((s) => s.id === "prove");
   // Without this, `proofcast run`'s non-zero exit would kill the job before the
