@@ -82,7 +82,9 @@ runs:
           p?.version ?? 'unknown';
         " 2>/dev/null || echo unknown)"
         echo "playwright=$PW" >> "$GITHUB_OUTPUT"
-        echo "Playwright $PW → Chromium cache key"
+        LOCK="$(sha256sum "$GITHUB_ACTION_PATH/package-lock.json" | cut -c1-16)"
+        echo "lock=$LOCK" >> "$GITHUB_OUTPUT"
+        echo "Playwright $PW · lockfile $LOCK"
 
     # Chromium is ~130 MB and identical between runs — downloading it every time was
     # the single biggest slice of the job.
@@ -92,6 +94,15 @@ runs:
       with:
         path: ~/.cache/ms-playwright
         key: proofcast-chromium-${{ runner.os }}-pw${{ steps.cache-key.outputs.playwright }}
+
+    # With the browser cached, `npm ci` becomes the dominant cost (~27s, mostly
+    # fetching tarballs). npm's own download cache removes the network round-trips;
+    # the lockfile hash keys it, so a dependency change invalidates it exactly.
+    - name: Restore the npm cache
+      uses: actions/cache@v4
+      with:
+        path: ~/.npm
+        key: proofcast-npm-${{ runner.os }}-${{ steps.cache-key.outputs.lock }}
 
     # ProofCast bundles its own ffmpeg (ffmpeg-static), so only the browser and its
     # system libraries are missing from a bare runner. Chromium is installed through

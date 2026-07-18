@@ -138,6 +138,15 @@ test("Chromium is cached across runs — it is the biggest slice of the job", ()
   );
 });
 
+test("npm's download cache is keyed on the lockfile — exact invalidation", () => {
+  const caches = ACTION.runs.steps.filter((s) => String(s.uses ?? "").startsWith("actions/cache"));
+  const npmCache = caches.find((s) => String(s.with.path).includes(".npm"));
+  assert.ok(npmCache, "with the browser cached, `npm ci` is the dominant cost");
+  // A lockfile hash is the only key that invalidates precisely when deps change.
+  assert.match(String(npmCache.with.key), /steps\.cache-key\.outputs\.lock/);
+  assert.match(ACTION.runs.steps.find((s) => s.id === "cache-key").run, /sha256sum/);
+});
+
 test("both workflows cancel superseded runs, so a stale proof cannot win the race", () => {
   for (const [label, wf] of [
     ["example", EXAMPLE],
