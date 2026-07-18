@@ -6,8 +6,10 @@
 
 **Agents can write code and ship it. ProofCast makes them prove it works first — on video, in a real browser — before anything reaches production.**
 
+[![GitHub Marketplace](https://img.shields.io/badge/Marketplace-ProofCast-2ea44f?logo=github)](https://github.com/marketplace/actions/proofcast-proof-in-your-pr)
 [![npm](https://img.shields.io/npm/v/proofcast?color=cb3837&logo=npm)](https://www.npmjs.com/package/proofcast)
 [![CI](https://github.com/guillaumeCode2012/proofcast/actions/workflows/ci.yml/badge.svg)](https://github.com/guillaumeCode2012/proofcast/actions/workflows/ci.yml)
+[![Proof](https://github.com/guillaumeCode2012/proofcast/actions/workflows/proof.yml/badge.svg)](https://github.com/guillaumeCode2012/proofcast/actions/workflows/proof.yml)
 ![Node](https://img.shields.io/badge/node-%E2%89%A518.17-3c873a)
 ![TypeScript](https://img.shields.io/badge/TypeScript-ESM-3178c6)
 ![License](https://img.shields.io/badge/license-MIT-blue)
@@ -91,9 +93,10 @@ default browser.
 
 ## Add proof to your CI
 
-Reviewers approve diffs. They almost never *run* the thing. The **ProofCast GitHub
-Action** closes that gap: on every pull request it boots your app, drives the feature
-in real Chromium, records it, and puts the result **in the PR itself**.
+Reviewers approve diffs. They almost never *run* the thing. The
+[**ProofCast GitHub Action**](https://github.com/marketplace/actions/proofcast-proof-in-your-pr)
+closes that gap: on every pull request it boots your app, drives the feature in real
+Chromium, records it, and puts the result **in the PR itself**.
 
 Drop this in `.github/workflows/proof.yml`:
 

@@ -46,9 +46,19 @@ git push -f origin v1
      asserts all three, so a green suite means the manifest is listable.
 4. Accept the **GitHub Marketplace Developer Agreement** (once per account).
 5. Choose categories — **Continuous integration** as primary, **Testing** as secondary.
-6. The action's `name:` must be **globally unique across the Marketplace**. If
-   "ProofCast" is taken, change `name:` in `action.yml`, commit, and re-tag.
+6. The action's `name:` must be **globally unique across the Marketplace**. Bare
+   `ProofCast` was already taken, which is why `action.yml` says
+   **"ProofCast — Proof in your PR"**. If you ever hit the clash again: change `name:`
+   in `action.yml`, commit, **and re-cut the tags** — moving `v1` is what makes the
+   new name reach anyone actually using the action. `npm test` fails if `name:`
+   regresses to the taken one.
 7. Write the release notes, then **Publish release**.
+
+> Listed since v0.5.3:
+> <https://github.com/marketplace/actions/proofcast-proof-in-your-pr>
+> The listing follows the **tag you publish it from**, so list each new release from
+> its own tag. How users reference the action never changes —
+> `guillaumeCode2012/proofcast@v1` comes from the repository name, not the display name.
 
 ## 3. Verify it from the outside
 
