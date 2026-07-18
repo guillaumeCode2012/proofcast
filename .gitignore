@@ -39,6 +39,8 @@ yarn-error.log*
 
 # Local agent / editor settings (machine-specific)
 .claude/settings.local.json
+# Local agent/editor scratch config (launch targets, per-machine paths)
+.claude/launch.json
 
 # OS / editor cruft
 .DS_Store
