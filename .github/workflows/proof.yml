@@ -27,6 +27,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Dogfooding only. Installing ProofCast from this checkout re-runs `prepare`
+      # (tsc) in the workspace, which needs the devDependencies to be present —
+      # consumers install from npm, which ships a prebuilt dist/ and skips `prepare`.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+
       - uses: ./
         with:
           path: examples/checkout
