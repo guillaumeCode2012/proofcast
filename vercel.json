@@ -1,5 +1,4 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "//": "The Next.js app lives in landing/, but this Vercel project builds from the repo root (its Root Directory setting is unset), so zero-config detection looks for `next` in the ROOT package.json and fails. Pointing the Next builder at landing/package.json explicitly is the in-repo equivalent of setting Root Directory = landing.",
   "builds": [{ "src": "landing/package.json", "use": "@vercel/next" }]
 }
