@@ -91,6 +91,89 @@ default browser.
 
 ---
 
+## See it work
+
+Three real apps, three real proofs. **Every GIF below is an actual ProofCast
+recording**, produced by the exact command printed under it — no API key, no
+Docker, no signup, nothing to install beyond `npm install`. Clone the repo and you
+get the same three videos, on **macOS, Linux and Windows** alike.
+
+Each example is a self-contained, zero-dependency app (Node's built-in `http`
+server only), so it boots in a second and pulls nothing from the network.
+
+### 1. Signup — the account is really created
+
+<img src="docs/example-signup.gif" alt="ProofCast driving the signup example: it types a full name, an email and a password, clicks Create account, and the page confirms 'Account created for demo.user@example.com'." width="620" />
+
+ProofCast fills [examples/signup](examples/signup) the way a user would, submits,
+and watches the page confirm **“Account created for demo.user@example.com ✓”**.
+
+```bash
+npx proofcast run ./examples/signup
+```
+
+### 2. Checkout — the payment really goes through
+
+<img src="docs/example-checkout.gif" alt="ProofCast driving the checkout example: it types the test card 4242 4242 4242 4242, an expiry and a CVC, clicks Pay $149.00, and the panel flips to a green 'Payment successful' with an order number." width="620" />
+
+ProofCast types the test card `4242 4242 4242 4242` into
+[examples/checkout](examples/checkout), clicks *Pay $149.00*, and waits out the
+async payment until it settles on **“Payment successful”** with a real order number.
+
+```bash
+npx proofcast run ./examples/checkout
+```
+
+### 3. Task list — the item really lands in the list
+
+<img src="docs/example-todo.gif" alt="ProofCast driving the todo example: it types 'Ship the Q3 release notes' into the task field, clicks Add task, the item appears in the list and the counter changes from '0 tasks' to '1 open · 1 total'." width="620" />
+
+No password, no card — just a feature. ProofCast types a task into
+[examples/todo](examples/todo), clicks *Add task*, and watches the list actually
+grow: the item appears and the counter goes from **“0 tasks”** to
+**“1 open · 1 total”**.
+
+```bash
+npx proofcast run ./examples/todo
+```
+
+Each run prints one JSON line and exits `0` only if the proof passed:
+
+```json
+{ "success": true, "proofPath": ".../examples/todo/proofcast-proof.mp4", "durationMs": 3380 }
+```
+
+Add `--share --open` to any of them to get the portable proof page and pop it
+straight into your browser. Point the same command at **your own** project:
+
+```bash
+npx proofcast run ./path/to/your-app --share --open
+```
+
+> These three are also the CI guard: `npm test` boots each one in real Chromium
+> and asserts the proof comes back `success: true`, so a gallery entry can never
+> quietly rot into a broken example.
+
+### On ports (and why a proof can refuse to run)
+
+ProofCast picks a **free port** for every run and passes it to your project as
+`$PORT` — so proving something never collides with the dev server you already
+have on `:3000`, and several proofs can run at once.
+
+If the port it is told to use is **already serving something**, ProofCast stops
+instead of proving. That refusal is deliberate: a server that is already up is
+indistinguishable from your project having booted, so continuing would record
+*that other application* and report it as a passing proof. A proof of the wrong
+code is worse than no proof, so this one fails closed:
+
+```
+Le port 3000 est déjà utilisé par un autre processus — impossible d'y démarrer
+le projet à prouver. ProofCast refuse de continuer : la preuve enregistrerait
+l'application de ce processus, pas la tienne.
+```
+
+---
+
 ## Add proof to your CI
 
 Reviewers approve diffs. They almost never *run* the thing. The
