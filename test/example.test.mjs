@@ -9,21 +9,84 @@ import { chromium } from "playwright";
 
 import { proofcastDemo, DEMO_PROOF_FILENAME } from "../dist/cli.js";
 import { proveCode, spawnServerProcess, waitForPort } from "../dist/prover.js";
-import { autoFillDemoForm } from "../dist/video.js";
+import { smartDemo } from "../dist/video.js";
 
 /**
- * End-to-end test for the "2-minute local trial" (examples/signup).
+ * End-to-end test for the three shipped examples (the README's "See it work"
+ * gallery), covering the three shapes ProofCast proves: auth, payment, and plain
+ * stateful CRUD.
  *
- * It exercises the REAL pipeline — the real prover boots the real example server
+ * It exercises the REAL pipeline — the real prover boots each real example server
  * (Node's built-in http, zero dependencies) and drives it in a REAL Chromium,
  * recording a REAL MP4 via ffmpeg. Nothing is mocked and nothing hits the
- * network: the example has no dependencies, so it is spawned directly with
+ * network: the examples have no dependencies, so they are spawned directly with
  * `node server.js` (no `npm install`, no registry). This is the CI guard that
- * keeps `proofcast run ./examples/signup` (a.k.a. `npm run demo`) honest.
+ * keeps every `proofcast run ./examples/<name>` in the README honest.
  */
 
-/** The committed example directory (tests run with cwd = repo root). */
-const EXAMPLE_DIR = join(process.cwd(), "examples", "signup");
+/**
+ * The three committed examples (tests run with cwd = repo root). Each `drive`
+ * asserts the feature ACTUALLY moved — not merely that the page loaded — using
+ * `smartDemo`, the exact driver `proofcast run` uses by default with the exact
+ * default form data. If a change ever made the driver scroll past one of these
+ * instead of driving it, these assertions fail.
+ */
+const EXAMPLES = [
+  {
+    name: "signup",
+    what: "creates the account",
+    drive: async (page) => {
+      assert.equal(await page.locator("#email").inputValue(), "demo.user@example.com", "email typed");
+      assert.match(
+        await page.locator("#result").textContent(),
+        /Account created for demo\.user@example\.com/,
+        "submitting the signup form must create the account",
+      );
+    },
+  },
+  {
+    name: "checkout",
+    what: "pays with the test card",
+    drive: async (page) => {
+      assert.equal(await page.locator("#cardnumber").inputValue(), "4242 4242 4242 4242", "test card typed");
+      // The payment is deliberately async (a brief "processing" step), so wait
+      // for the settled success state rather than sampling mid-flight.
+      await page.locator(".success h2").waitFor({ timeout: 5_000 });
+      assert.match(
+        await page.locator(".success h2").textContent(),
+        /Payment successful/,
+        "clicking Pay must complete the payment",
+      );
+      assert.match(
+        await page.locator(".success .order").textContent(),
+        /Order #\d+/,
+        "a real order number must be issued",
+      );
+    },
+  },
+  {
+    name: "todo",
+    what: "adds the task to the list",
+    drive: async (page) => {
+      assert.equal(await page.locator("#list li").count(), 1, "the task must be added to the list");
+      assert.equal(
+        await page.locator("#list li span").first().textContent(),
+        "Ship the Q3 release notes",
+        "the typed task must appear in the list",
+      );
+      assert.equal(
+        await page.locator("#count").textContent(),
+        "1 open · 1 total",
+        "the counter must reflect the new task",
+      );
+    },
+  },
+];
+
+/** Absolute path to a committed example directory. */
+function exampleDir(name) {
+  return join(process.cwd(), "examples", name);
+}
 
 /** Ask the OS for a free loopback port so parallel runs never collide. */
 function freePort() {
@@ -42,7 +105,11 @@ function looksLikeMp4(buffer) {
   return Buffer.isBuffer(buffer) && buffer.length > 12 && buffer.subarray(4, 8).toString("ascii") === "ftyp";
 }
 
-/** Spawn the example the way local mode does — `node server.js` on `port` — and wait for it. */
+/**
+ * Spawn an example the way local mode does — `node server.js` on `port` — and
+ * wait for it. Uses `process.execPath` (not `npm`) so this works identically on
+ * Windows, macOS and Linux with no shell involved.
+ */
 async function startExample(dir, port) {
   const handle = await spawnServerProcess(dir, port, {
     command: process.execPath,
@@ -52,49 +119,56 @@ async function startExample(dir, port) {
   return handle;
 }
 
-test("examples/signup: the signup feature actually works (real Chromium)", async () => {
-  const port = await freePort();
-  const server = await startExample(EXAMPLE_DIR, port);
-  const browser = await chromium.launch();
-  try {
-    const page = await browser.newPage();
-    await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: "load" });
+for (const example of EXAMPLES) {
+  test(`examples/${example.name}: the feature actually works — it ${example.what} (real Chromium)`, async () => {
+    const port = await freePort();
+    const server = await startExample(exampleDir(example.name), port);
+    const browser = await chromium.launch();
+    try {
+      const page = await browser.newPage();
+      const consoleErrors = [];
+      page.on("console", (msg) => {
+        if (msg.type() === "error") consoleErrors.push(msg.text());
+      });
+      page.on("pageerror", (err) => consoleErrors.push(err.message));
 
-    // Drive it with the SAME form-filler the prover uses in the real pipeline.
-    await autoFillDemoForm(page, { email: "trial@example.com", password: "S3curePass!" });
+      await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: "load" });
 
-    assert.equal(await page.locator("#email").inputValue(), "trial@example.com");
-    assert.match(
-      await page.locator("#result").textContent(),
-      /Account created for trial@example\.com/,
-      "submitting the signup form must create the account (no bug, no console error)",
-    );
-  } finally {
-    await browser.close();
-    await server.stop();
-  }
-});
+      // The SAME adaptive driver the prover runs in the real pipeline, with the
+      // same default form data — so this test fails for the same reasons a real
+      // `proofcast run` would.
+      await smartDemo(page);
+      await example.drive(page);
 
-test("examples/signup: the real prover proves it and records a genuine MP4 (no network)", async () => {
-  const port = await freePort();
-
-  const report = await proveCode(EXAMPLE_DIR, {
-    port,
-    execution: "local",
-    // Zero-dependency example ⇒ skip `npm install` (nothing to fetch) and boot it
-    // directly. Everything else — the browser drive, error capture, ffmpeg
-    // transcode — is the real prover, unmocked.
-    deps: {
-      startServer: (dir, p) => startExample(dir, p),
-    },
+      assert.deepEqual(consoleErrors, [], "a shipped example must run clean in the console");
+    } finally {
+      await browser.close();
+      await server.stop();
+    }
   });
 
-  assert.equal(report.success, true, `expected a passing proof, got: ${JSON.stringify(report.errors)}`);
-  assert.equal(report.errors, undefined, "a healthy run reports no errors");
-  assert.ok(looksLikeMp4(report.video), "the proof must be a real MP4 (ftyp box present)");
-  assert.ok(report.video.length > 0, "the proof video must be non-empty");
-  assert.equal(typeof report.durationMs, "number");
-});
+  test(`examples/${example.name}: the real prover reports success:true and a genuine MP4 (no network)`, async () => {
+    const port = await freePort();
+
+    const report = await proveCode(exampleDir(example.name), {
+      port,
+      execution: "local",
+      // Zero-dependency example ⇒ skip `npm install` (nothing to fetch) and boot
+      // it directly. Everything else — the browser drive, error capture, ffmpeg
+      // transcode — is the real prover, unmocked.
+      deps: {
+        startServer: (dir, p) => startExample(dir, p),
+      },
+    });
+
+    assert.equal(report.success, true, `expected a passing proof, got: ${JSON.stringify(report.errors)}`);
+    assert.equal(report.errors, undefined, "a healthy run reports no errors");
+    assert.ok(looksLikeMp4(report.video), "the proof must be a real MP4 (ftyp box present)");
+    assert.ok(report.video.length > 0, "the proof video must be non-empty");
+    assert.equal(typeof report.sourceHash, "string", "a passing proof is bound to the source it proved");
+    assert.equal(typeof report.durationMs, "number");
+  });
+}
 
 test("proofcast demo: bundled example → real MP4 in an empty out dir, exit 0 (no Docker, no API key)", async () => {
   // The whole point: from a folder with NO user files, `demo` resolves the example

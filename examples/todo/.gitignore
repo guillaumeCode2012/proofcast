@@ -1,0 +1,6 @@
+# Local artifacts created when the prover boots this example (`npm install`
+# on the host in local mode, and the proof video written next to it). None of
+# this belongs in the committed example.
+node_modules/
+package-lock.json
+proofcast-proof.mp4

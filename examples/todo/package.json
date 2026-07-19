@@ -1,0 +1,11 @@
+{
+  "name": "proofcast-example-todo",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Zero-dependency task list (stateful CRUD, no credentials) — the third shape ProofCast proves.",
+  "type": "module",
+  "scripts": {
+    "build": "node -e \"process.stdout.write('no build needed\\n')\"",
+    "start": "node server.js"
+  }
+}

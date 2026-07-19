@@ -59,6 +59,38 @@ const CHECKOUT_HTML = `<!doctype html><html><body>
 </script>
 </body></html>`;
 
+/** A task list: a text field + an Add button, and NO credential field at all. */
+const TODO_HTML = `<!doctype html><html><body>
+<form id="f">
+  <input id="task" name="task" type="text" placeholder="Add a task…">
+  <button type="submit">Add task</button>
+</form>
+<ul id="list"></ul>
+<div id="count">0 tasks</div>
+<script>
+  document.getElementById('f').addEventListener('submit', function (e) {
+    e.preventDefault();
+    var v = document.getElementById('task').value.trim();
+    if (!v) return;
+    var li = document.createElement('li');
+    li.textContent = v;
+    document.getElementById('list').appendChild(li);
+    document.getElementById('task').value = '';
+    document.getElementById('count').textContent =
+      document.getElementById('list').children.length + ' tasks';
+  });
+</script>
+</body></html>`;
+
+/**
+ * A landing page with a newsletter-style input but NO submit control — the case
+ * the "text input AND a submit button" rule deliberately leaves as a scroll.
+ */
+const LANDING_WITH_INPUT_HTML = `<!doctype html><html><body style="margin:0">
+<input id="newsletter" type="text" placeholder="Your email">
+<div style="height:3000px;background:linear-gradient(#ffffff,#000000)"></div>
+</body></html>`;
+
 function isPortClosed(port) {
   return new Promise((resolve) => {
     const socket = net.connect({ port, host: "127.0.0.1" });
@@ -175,6 +207,48 @@ test("smartDemo adapts: drives a checkout (card-number field, no password)", asy
       await page.locator("#result").textContent(),
       /Payment successful/,
       "a checkout (cc-number field) should be filled and paid, not scrolled",
+    );
+  } finally {
+    await browser.close();
+  }
+});
+
+test("smartDemo adapts: drives a list feature (text input + Add, no credentials)", async () => {
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage();
+    await page.setContent(TODO_HTML);
+
+    await smartDemo(page);
+
+    assert.equal(await page.locator("#list li").count(), 1, "the task must actually be added");
+    assert.equal(
+      await page.locator("#list li").first().textContent(),
+      "Ship the Q3 release notes",
+      "a task field gets a plausible task, not the person's name",
+    );
+    assert.equal(await page.locator("#count").textContent(), "1 tasks", "the list state moved");
+    assert.equal(
+      await page.evaluate(() => window.scrollY),
+      0,
+      "a driveable feature is driven, not scrolled past",
+    );
+  } finally {
+    await browser.close();
+  }
+});
+
+test("smartDemo adapts: still scrolls a landing page whose only input has no submit", async () => {
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage();
+    await page.setContent(LANDING_WITH_INPUT_HTML);
+
+    await smartDemo(page);
+
+    assert.ok(
+      (await page.evaluate(() => window.scrollY)) > 0,
+      "a text input alone is not a feature — without a submit control the page is scrolled",
     );
   } finally {
     await browser.close();

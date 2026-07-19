@@ -45,3 +45,8 @@ yarn-error.log*
 # OS / editor cruft
 .DS_Store
 Thumbs.db
+
+# Vercel CLI local link (`vercel link` / `vercel pull`). The OIDC token it writes
+# alongside is already covered by the `.env` / `.env.*` rules above — do NOT add a
+# broader `.env*` here, it would silently cancel the `!.env.example` exception.
+.vercel

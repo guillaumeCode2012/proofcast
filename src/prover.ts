@@ -341,6 +341,23 @@ export async function startSandboxServer(
  * process tree.
  */
 export async function startLocalServer(dirPath: string, port: number): Promise<ServerHandle> {
+  // Refuse a port that is ALREADY serving something. Without this check the boot
+  // sequence below is indistinguishable from success when another process owns
+  // the port: our server fails to bind (silently — stdio is "ignore"), the port
+  // probe connects to the SQUATTER, and Playwright records that stranger's app.
+  // The result is the worst possible outcome for a proof tool — a green proof of
+  // the wrong application. Docker mode is already immune (publishing onto a bound
+  // port fails outright, see SandboxPortInUseError); this gives local mode the
+  // same guarantee.
+  if (await isPortInUse(port)) {
+    throw new BootFailure(
+      "RUNTIME_ERROR",
+      `Le port ${port} est déjà utilisé par un autre processus — impossible d'y démarrer le projet à prouver. ` +
+        `ProofCast refuse de continuer : la preuve enregistrerait l'application de ce processus, pas la tienne. ` +
+        `Libère ce port (ou laisse ProofCast en choisir un libre) puis relance.`,
+    );
+  }
+
   try {
     await defaultInstallDeps(dirPath);
   } catch (err) {
@@ -369,6 +386,26 @@ export async function readContainerLogs(container: Docker.Container): Promise<st
   } catch {
     return "";
   }
+}
+
+/**
+ * True when something is ALREADY accepting connections on `port` — a single
+ * probe, no retry (the inverse of {@link waitForPort}). Used to fail closed
+ * before booting a local server, so a squatting process can never be mistaken for
+ * the project under proof. Never throws: any error means "nothing is there".
+ */
+export function isPortInUse(port: number, host = "127.0.0.1"): Promise<boolean> {
+  return new Promise<boolean>((resolveInUse) => {
+    const socket = createConnection({ port, host });
+    const settle = (inUse: boolean): void => {
+      socket.destroy();
+      resolveInUse(inUse);
+    };
+    socket.once("connect", () => settle(true));
+    socket.once("error", () => settle(false));
+    // A port that neither connects nor errors promptly is not one we can prove on.
+    socket.setTimeout(2_000, () => settle(false));
+  });
 }
 
 /** Resolve once a TCP connection to `port` succeeds, or reject after `timeoutMs`. */
