@@ -587,13 +587,13 @@ External services are mocked and injected; Chromium and ffmpeg run for real. Con
 | `ai` | `generateFeature`, `extractHtmlDocument`, `parseBrownfieldResponse`, `createAnthropicProvider`, `createOpenAiProvider`, `resolveProvider` |
 | `context-analyzer` | `analyzeTargetDirectory` |
 | `orchestrator` | `executeAndHeal`, `writeFileChanges` (self-heal loop) |
-| `prover` | `proveCode`, `runBrowserChecks`, `spawnServerProcess`, `classifyBrowserErrors` |
+| `prover` | `proveCode`, `runBrowserChecks`, `spawnServerProcess`, `classifyBrowserErrors`, `isPortInUse` |
 | `tools` | `ToolRegistry`, `createFsTools`, `createShellTool`, `createBrowserTools`, `createHttpTool`, `assertSafeHttpUrl`, `createSkillTools`, `createPreferenceTool`, `createGitHubTools`, `createPilotTool` |
 | `agent` / `planner` | `runAgent`, `createLlmPlanner`, `parsePlannerDecision` |
 | `skills` | `SkillStore`, `runSkill`; `writePreference`, `readPreferenceBlock` |
 | `gate` / `github` | `createProofGate`; `commitAll`, `openPullRequest`, `openProvenPullRequest` |
 | `webhook` / `daemon` | `startWebhookServer`, `verifyWebhookSignature`; `runIssueToPr`, `createScheduler` |
-| `cli` | `proofcast run` / `proofcast generate` (binaries) |
+| `cli` | `proofcast run` / `generate` / `demo` / `deploy` (binaries) |
 | `sandbox` | `startSandbox`, `stopSandbox` |
 | `video` | `recordDemo`, `smartDemo`, `runDemoActions`, `autoFillDemoForm`, `hasDemoBeenGenerated` |
 | `deployer` | `deployWithVercel`, `isVercelInstalled`, `extractDeploymentUrl` |
