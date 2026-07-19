@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createServer } from "node:http";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -8,6 +9,8 @@ import {
   BootFailure,
   classifyBootLogs,
   classifyBrowserErrors,
+  isPortInUse,
+  startLocalServer,
   startSandboxServer,
   spawnServerProcess,
 } from "../dist/prover.js";
@@ -270,6 +273,46 @@ test("spawnServerProcess starts a real child and stop() actually kills it (PID b
 
   // stop() is idempotent — a second call must not throw.
   await handle.stop();
+});
+
+// ── Port-squatter guard ─────────────────────────────────────────────────────
+
+test("isPortInUse detects a listening socket, and reports a free port as free", async () => {
+  const squatter = createServer((_req, res) => res.end("not the project under proof"));
+  const port = await new Promise((resolve) => {
+    squatter.listen(0, "127.0.0.1", () => resolve(squatter.address().port));
+  });
+  try {
+    assert.equal(await isPortInUse(port), true, "a listening port is in use");
+  } finally {
+    await new Promise((resolve) => squatter.close(resolve));
+  }
+  assert.equal(await isPortInUse(port), false, "…and free again once it closes");
+});
+
+test("startLocalServer REFUSES a port already served by another process", async () => {
+  // The bug this guards: our server fails to bind (silently — stdio is "ignore"),
+  // the readiness probe connects to the squatter instead, and the recording ends
+  // up being of a completely different application — reported as a PASSING proof.
+  const squatter = createServer((_req, res) => res.end("<title>Someone else's app</title>"));
+  const port = await new Promise((resolve) => {
+    squatter.listen(0, "127.0.0.1", () => resolve(squatter.address().port));
+  });
+
+  try {
+    await assert.rejects(
+      // FAKE_DIR does not exist: if the guard did NOT run first, this would fail
+      // on `npm install` instead — so the assertion below also pins the ordering.
+      () => startLocalServer(FAKE_DIR, port),
+      (err) => {
+        assert.ok(err instanceof BootFailure, "throws a BootFailure");
+        assert.match(err.message, new RegExp(`port ${port} est déjà utilisé`, "i"));
+        return true;
+      },
+    );
+  } finally {
+    await new Promise((resolve) => squatter.close(resolve));
+  }
 });
 
 /** Poll `process.kill(pid, 0)` until it throws (process gone) or the deadline. */

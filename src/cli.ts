@@ -143,9 +143,14 @@ export interface CliDependencies {
 function withDefaults(overrides: Partial<CliDependencies> = {}): CliDependencies {
   return {
     loadConfig: overrides.loadConfig ?? defaultLoadConfig,
+    // Use a FREE port, for the same reason `demo` does below: the fixed 3000 is
+    // exactly the port a developer's own dev server is most likely to be sitting
+    // on, and proving a project is not a good reason to collide with it. Projects
+    // honour $PORT, so this also lets several proofs run concurrently.
     proveCode:
       overrides.proveCode ??
-      ((dirPath, execution) => defaultProveCode(dirPath, { execution: resolveExecution(execution) })),
+      (async (dirPath, execution) =>
+        defaultProveCode(dirPath, { execution: resolveExecution(execution), port: await freePort() })),
     // Force LOCAL: the demo must run from any empty folder without Docker. The
     // bundled example is our own trusted, zero-dependency code, so running it on
     // the host is safe. Use a FREE port (not the fixed 3000): the example honours
@@ -154,11 +159,14 @@ function withDefaults(overrides: Partial<CliDependencies> = {}): CliDependencies
     proveDemo:
       overrides.proveDemo ??
       (async (dirPath) => defaultProveCode(dirPath, { execution: "local", port: await freePort() })),
+    // Same free-port reasoning as `run` and `demo` above — the heal loop reuses
+    // this one port across its attempts, each of which tears its own server down.
     executeAndHeal:
       overrides.executeAndHeal ??
-      ((description, dirPath, maxRetries, execution) =>
+      (async (description, dirPath, maxRetries, execution) =>
         defaultExecuteAndHeal(description, dirPath, maxRetries, {
           execution: resolveExecution(execution),
+          port: await freePort(),
         })),
     deployWithVercel: overrides.deployWithVercel ?? ((options) => defaultDeployWithVercel(options)),
     verifyProof: overrides.verifyProof ?? ((dir) => defaultVerifyProofArtifact(dir)),
