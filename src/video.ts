@@ -80,6 +80,8 @@ export interface DemoFormData {
   cardExpiry?: string;
   /** Value typed into a card CVC/CVV field. */
   cardCvc?: string;
+  /** Value typed into a task/todo field (list flows). */
+  task?: string;
 }
 
 const DEMO_FORM_DEFAULTS = {
@@ -90,13 +92,49 @@ const DEMO_FORM_DEFAULTS = {
   cardNumber: "4242 4242 4242 4242",
   cardExpiry: "12 / 28",
   cardCvc: "123",
+  // A todo/task field gets a plausible task, not the person's name — same reason
+  // the card fields are filled before the generic text pass below.
+  task: "Ship the Q3 release notes",
 } as const;
 
 /**
+ * Fields that take free text. Used both to fill them and — in {@link smartDemo} —
+ * to recognise a form worth driving.
+ */
+const TEXT_INPUT_SELECTOR =
+  'input:not([type]), input[type="text"], input[type="search"], input[type="tel"]';
+
+/**
+ * The primary "commit this form" control, across the flows ProofCast drives:
+ * auth (Create / Sign up / Log in), checkout (Pay / Buy / Place order) and
+ * list/CRUD features (Add / Save). Shared with {@link smartDemo} so the demo
+ * never fills a form it then has no way to submit.
+ */
+const SUBMIT_SELECTOR = [
+  'button[type="submit"]',
+  'input[type="submit"]',
+  'button:has-text("Create")',
+  'button:has-text("Sign up")',
+  'button:has-text("Register")',
+  'button:has-text("Log in")',
+  'button:has-text("Login")',
+  'button:has-text("Continue")',
+  'button:has-text("Pay")',
+  'button:has-text("Buy")',
+  'button:has-text("Checkout")',
+  'button:has-text("Place order")',
+  'button:has-text("Complete")',
+  'button:has-text("Add")',
+  'button:has-text("Save")',
+  'button:has-text("Send")',
+].join(", ");
+
+/**
  * Demonstrate a feature by filling its form the way a user would and submitting.
- * Handles auth forms (email + password) AND checkout forms (card number, expiry,
- * CVC), then any remaining plain text field (name on card, username, ...), and
- * clicks the primary submit button (Create / Sign up / Pay / Buy / Checkout / ...).
+ * Handles auth forms (email + password), checkout forms (card number, expiry,
+ * CVC) AND list forms (task/todo), then any remaining plain text field (name on
+ * card, username, ...), and clicks the primary submit button (Create / Sign up /
+ * Pay / Buy / Checkout / Add / Save / ...).
  * No-op on pages without matching inputs (e.g. a static landing page). Best-effort:
  * individual fields are skipped rather than throwing, so an unusual layout never
  * breaks the recording.
@@ -108,6 +146,7 @@ export async function autoFillDemoForm(page: Page, data: DemoFormData = {}): Pro
   const cardNumber = data.cardNumber ?? DEMO_FORM_DEFAULTS.cardNumber;
   const cardExpiry = data.cardExpiry ?? DEMO_FORM_DEFAULTS.cardExpiry;
   const cardCvc = data.cardCvc ?? DEMO_FORM_DEFAULTS.cardCvc;
+  const task = data.task ?? DEMO_FORM_DEFAULTS.task;
 
   await fillVisibleFields(
     page,
@@ -135,32 +174,17 @@ export async function autoFillDemoForm(page: Page, data: DemoFormData = {}): Pro
     cardCvc,
   );
 
+  // Task/todo fields, before the generic pass for the same reason as the card
+  // fields: a list feature's input wants a plausible task, not a person's name.
   await fillVisibleFields(
     page,
-    'input:not([type]), input[type="text"], input[type="search"], input[type="tel"]',
-    text,
-    true,
+    'input[name*="task" i], input[id*="task" i], input[placeholder*="task" i], input[name*="todo" i], input[id*="todo" i], input[placeholder*="todo" i]',
+    task,
   );
 
-  const submit = page
-    .locator(
-      [
-        'button[type="submit"]',
-        'input[type="submit"]',
-        'button:has-text("Create")',
-        'button:has-text("Sign up")',
-        'button:has-text("Register")',
-        'button:has-text("Log in")',
-        'button:has-text("Login")',
-        'button:has-text("Continue")',
-        'button:has-text("Pay")',
-        'button:has-text("Buy")',
-        'button:has-text("Checkout")',
-        'button:has-text("Place order")',
-        'button:has-text("Complete")',
-      ].join(", "),
-    )
-    .first();
+  await fillVisibleFields(page, TEXT_INPUT_SELECTOR, text, true);
+
+  const submit = page.locator(SUBMIT_SELECTOR).first();
   if ((await submit.count()) > 0) {
     await submit.click().catch(() => {
       /* non-fatal for a demo */
@@ -255,16 +279,26 @@ export async function runDemoActions(
 }
 
 /**
- * Adaptive default demo: if the page has a fillable form — an auth form (a
- * password field) or a checkout (a card-number field) — fill it in and submit,
- * demonstrating a real login / account creation / card payment; otherwise scroll
- * through the page (landing / static content). The agent can always override with
- * explicit `actions` or `onPage`.
+ * Adaptive default demo: if the page has a feature to drive, fill its form in and
+ * submit it — demonstrating a real login / account creation / card payment / item
+ * added; otherwise scroll through the page (landing / static content). The agent
+ * can always override with explicit `actions` or `onPage`.
+ *
+ * A feature is recognised either by a credential field (a password or a card
+ * number — unambiguous on their own) or by a text input paired with a submit
+ * control, which is the shape of the third common case: todo lists, contact
+ * forms, search-and-add. Requiring BOTH halves for that last case is what keeps a
+ * landing page that merely has a newsletter input from being "submitted" instead
+ * of scrolled.
  */
 export async function smartDemo(page: Page, formData?: DemoFormData): Promise<void> {
-  const hasFillableForm =
+  const hasCredentialField =
     (await page.locator('input[type="password"], input[autocomplete="cc-number"]').count()) > 0;
-  if (hasFillableForm) {
+  const hasSubmittableForm =
+    (await page.locator(TEXT_INPUT_SELECTOR).count()) > 0 &&
+    (await page.locator(SUBMIT_SELECTOR).count()) > 0;
+
+  if (hasCredentialField || hasSubmittableForm) {
     await autoFillDemoForm(page, formData);
   } else {
     await scrollThrough(page);
